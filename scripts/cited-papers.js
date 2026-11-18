@@ -83,7 +83,7 @@ function createPage () {
   })
   .catch((err) => {
     $('.loader').hide()
-    $('#error-msg').html(err)
+    $('#error-msg').text(String(err))
   })
 }
 

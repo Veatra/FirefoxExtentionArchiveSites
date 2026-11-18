@@ -52,13 +52,13 @@ function populateBooks(url) {
     } else {
       $('.loader').hide()
       $('#resultsTray').css('grid-template-columns', 'none').append(
-        $('<div>').html(data.message)
+        $('<div>').text(data.message)
       )
     }
   }).catch((error) => {
     $('.loader').hide()
     $('#resultsTray').css('grid-template-columns', 'none').append(
-      $('<div>').html(error)
+      $('<div>').text(String(error))
     )
   })
 }

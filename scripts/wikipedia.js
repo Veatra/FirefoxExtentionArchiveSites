@@ -85,7 +85,8 @@
           let metadata = getMetadata(data[isbn])
           let page = getPageFromCitation(book)
           if (id) {
-            let id_page = (page) ? `${id}/page/${page}` : id
+            const itemId = encodeURIComponent(id)
+            let id_page = page ? `${itemId}/page/${page}` : itemId
             let icon = addReadIcon(id_page, metadata)
             book.parentElement.append(icon)
           } else {
@@ -107,7 +108,7 @@
       return {
         'title': (book.metadata.title.length > MAX_TITLE_LEN) ? book.metadata.title.slice(0, MAX_TITLE_LEN) + '...' : book.metadata.title,
         'author': book.metadata.creator,
-        'image': 'https://archive.org/services/img/' + book.metadata.identifier
+        'image': 'https://archive.org/services/img/' + encodeURIComponent(book.metadata.identifier)
       }
     }
     return false
@@ -123,7 +124,8 @@
   function addReadIcon(id, metadata) {
     return attachTooltip(
       createArchiveAnchor(id),
-      createReadToolTip(id, metadata)
+      createReadToolTip(id, metadata),
+      metadata
     )
   }
 
@@ -142,8 +144,8 @@
   function createReadToolTip(id, metadata) {
     return `<a href="https://www.archive.org/details/${id}" target="_blank">
       <div class="wm1996-tooltip-header">
-        <p class="wm1996-tooltip-title">${metadata.title}</p>
-        <p class="wm1996-tooltip-author">${metadata.author}</p>
+        <p class="wm1996-tooltip-title"></p>
+        <p class="wm1996-tooltip-author"></p>
       </div>
       <div class="wm1996-tooltip-details">` +
         (metadata.image ? `<div class="wm1996-book-outer"><img class="wm1996-book-img" src="${metadata.image}" alt="Read Book"></div>` : '') +
@@ -205,7 +207,7 @@
   // args are plain strings of HTML.
   // returns a DOM element.
   //
-  function attachTooltip(anchorHtml, tooltipHtml) {
+  function attachTooltip(anchorHtml, tooltipHtml, metadata) {
     // create icon
     let span = document.createElement('span')
     span.className = 'wm1996-tooltip'
@@ -218,6 +220,10 @@
       div.className = 'wm1996-tooltip-body'
       if (target.dataset && target.dataset.tooltip) {
         div.innerHTML = target.dataset.tooltip
+        if (metadata) {
+          div.querySelector('.wm1996-tooltip-title').textContent = metadata.title
+          div.querySelector('.wm1996-tooltip-author').textContent = metadata.author
+        }
       }
       // use absolute position of tooltip icon relative to document
       let rect = target.getBoundingClientRect()
@@ -250,8 +256,8 @@
 
   // calling direct instead of onload because of delay while injecting script
   if ((typeof chrome !== 'undefined') && chrome.storage) {
-    chrome.storage.local.get(['agreement', 'wiki_setting'], (settings) => {
-      if (settings?.agreement && settings.wiki_setting && location.href && isWikipediaUrl(location.href)) {
+    chrome.storage.local.get(['agreement', 'private_mode_setting', 'wiki_setting'], (settings) => {
+      if (settings?.agreement && settings.private_mode_setting === false && settings.wiki_setting && location.href && isWikipediaUrl(location.href)) {
         addCitations(location.href)
       }
     })
