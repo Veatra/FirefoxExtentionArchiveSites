@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add opt-in Archive.today and archive.is search and saving, including Save to both.
+- Widen the popup, separate provider results, and add a configurable recent-copy limit in Settings.
+- Keep save feedback separate from the Wayback save button so the next action is clear.
+
 - Raise the Firefox minimum to ESR 115 and load shared background helpers before listeners.
 - Screen local and unsupported URL literals, fix case-insensitive and apex exclusion matching, and enforce Private Mode for automatic lookups and saves.
 - Serialize per-tab state writes, clean up old tab state, avoid treating canceled navigation as DNS failure, and fix popup window dimensions.

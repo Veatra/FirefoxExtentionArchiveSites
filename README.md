@@ -12,6 +12,11 @@ The extension has no build step or runtime package dependencies. For an unsigned
 
 Run `node --test tests/utils.test.js` with Node 20 or newer. If Mozilla's `web-ext` is installed, run `web-ext lint --ignore-files 'META-INF/**' 'tests/**'`. See [COMPAT.md](COMPAT.md) and [REGRESSION.md](REGRESSION.md) for tested behavior and remaining checks.
 
-## Archives
+## Find and save copies
 
-Open the popup and expand **Archives** to see the Wayback total and recent captures. Choose 5, 10 or 20 rows. Each readable capture includes its UTC date and time, available HTTP status, a link, and a Copy button. Requests start on open, and Private Mode or an excluded URL blocks the lookup. See [PRIVACY-DELTA.md](PRIVACY-DELTA.md).
+- Open **Find saved copies** in the popup for Wayback totals and recent snapshots. You can open or copy a capture link.
+- In **Settings → General → Archive providers**, choose how many recent copies to display (1–30). Turn on Archive.today and select either `archive.today` or `archive.is`.
+- **Save to both** requests a Wayback capture and opens the selected Archive.today mirror with the same URL. The mirror may need you to complete a challenge or confirmation. **Save to Archive.today** opens just the second provider.
+- Archive.today availability is shown as unknown. **Open snapshot search** opens the mirror's search results. The popup has no reliable source for its capture count or recent history.
+
+Private Mode and exclusions block Archive.today actions. Archive.today is off by default. See [PRIVACY-DELTA.md](PRIVACY-DELTA.md).

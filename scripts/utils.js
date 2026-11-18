@@ -482,16 +482,42 @@ function remove_wbm(url) {
 * @return {string}
 */
 function getCleanUrl(url) {
-  let rurl = url || ''
-  if (rurl.includes('extension:')) {
-    // return url param from extension page
-    const url_param = new URL(url)
-    rurl = url_param.searchParams.get('url')
-  } else if (rurl.includes('web.archive.org')) {
-    // return url from archive.org page
-    rurl = remove_wbm(url)
+  if (typeof url !== 'string') { return '' }
+  try {
+    const parsed = new URL(url)
+    if (['moz-extension:', 'chrome-extension:', 'safari-web-extension:', 'extension:'].includes(parsed.protocol)) {
+      return parsed.searchParams.get('url') || ''
+    }
+    if (parsed.hostname === 'web.archive.org') { return remove_wbm(url) }
+  } catch (error) {
+    return url
   }
-  return rurl
+  return url
+}
+
+const archiveTodayMirrors = ['archive.today', 'archive.is']
+
+function archiveTargetUrl(value, patterns) {
+  if (!isNotExcludedUrl(value) || isUrlInList(value, patterns)) { return null }
+  const url = new URL(value)
+  const host = url.hostname.replace(/\.$/, '')
+  if (host === 'web.archive.org' || /(^|\.)archive\.(?:today|is|ph|fo|li|md|vn)$/.test(host)) { return null }
+  url.hash = ''
+  return isUrlInList(url.href, patterns) ? null : url.href
+}
+
+function archiveTodayActionUrl(mirror, target, action) {
+  if (!archiveTodayMirrors.includes(mirror) || !target) { return null }
+  if (action !== 'search' && action !== 'save') { return null }
+  const url = new URL(action === 'search' ? '/search/' : '/', 'https://' + mirror)
+  url.search = new URLSearchParams(action === 'search' ? { q: target } : { run: '1', url: target })
+  return url.href
+}
+
+function archiveCaptureLimit(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') { return 5 }
+  const limit = Number(value)
+  return Number.isInteger(limit) && limit >= 1 && limit <= 30 ? limit : 5
 }
 
 /**
@@ -885,6 +911,9 @@ if (typeof module !== 'undefined') {
     cropScheme,
     isNotExcludedUrl,
     getCleanUrl,
+    archiveTargetUrl,
+    archiveTodayActionUrl,
+    archiveCaptureLimit,
     wmAvailabilityCheck,
     openByWindowSetting,
     sleep,

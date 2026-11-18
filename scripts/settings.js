@@ -202,8 +202,8 @@ function showExcludeList() {
 
 // Prepares the top tab bar for switching between setting panels.
 function setupPanelSwitch() {
-  if (!$('#panel2-btn').hasClass('selected')) { $('#panel2-btn').addClass('selected') }
-  $('#first-panel').hide()
+  $('#panel1-btn').addClass('selected')
+  $('#second-panel').hide()
   $('#panel1-btn').click(() => {
     $('#second-panel').hide()
     $('#first-panel').show()

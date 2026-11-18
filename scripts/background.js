@@ -550,13 +550,13 @@ function checkSaveToMyWebArchive(url, timestamp) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) { return }
   if (message.message === 'saveurl') {
-    // Save Page Now
-    if (isValidUrl(message.page_url) && isNotExcludedUrl(message.page_url)) {
-      let page_url = getCleanUrl(message.page_url)
-      let silent = message.silent || false
-      let options = message.options || {}
-      savePageNowChecked(message.atab, page_url, silent, options)
+    // Save Page Now uses the public target even if the URL was extracted from an archive.
+    const pageUrl = getCleanUrl(message.page_url)
+    const accepted = isNotExcludedUrl(pageUrl) && !isArchiveUrl(pageUrl)
+    if (accepted) {
+      savePageNowChecked(message.atab, pageUrl, message.silent || false, message.options || {})
     }
+    sendResponse({ accepted })
   }
   else if (message.message === 'openurl') {
     // open URL in new tab or window depending on setting

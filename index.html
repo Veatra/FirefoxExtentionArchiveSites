@@ -5,7 +5,7 @@
   <meta content="text/html;charset=utf-8" http-equiv="Content-Type">
   <meta content="utf-8" http-equiv="encoding">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wayback Machine</title>
+  <title>Web Archives</title>
   <link rel="stylesheet" type="text/css" href="css/bootstrap.css">
   <link rel="stylesheet" type="text/css" href="css/common.css">
   <link rel="stylesheet" type="text/css" href="css/index.css">
@@ -17,8 +17,12 @@
   <!-- Main Popup Page -->
   <div class="unselectable page" id="popup-page">
 
-    <a tabindex="-1" href="#"><img class="resize-fit-center logo-wayback-machine" src="images/wayback-bordered.png"
-        alt="Wayback Machine"></a>
+    <header class="popup-heading">
+      <h1>Web Archives</h1>
+      <button type="button" class="tab-item" id="settings-tab-btn" aria-label="Settings" title="Settings">
+        <img src="images/fa/cog-solid.svg" class="tab-icon settings-icon-svg" alt="">
+      </button>
+    </header>
     <div class="text-center">
 
       <!-- Status Messages -->
@@ -34,7 +38,7 @@
       <form id="search-container">
         <div class="bootstrap-typeahead clearfix open">
           <div class="bootstrap-typeahead-input" tabindex="-1">
-            <input id="search-input" type="text" placeholder="Search URL" value="" autocomplete="off"
+            <input id="search-input" type="text" aria-label="Page URL" placeholder="Use another URL" value="" autocomplete="off"
               class="form-control has-aux bootstrap-typeahead-input-main has-selection">
           </div>
           <div id="suggestion-box" class="dropdown-menu bootstrap-typeahead-menu dropdown-menu-left">
@@ -56,15 +60,17 @@
       </div>
 
       <details id="archives-panel">
-        <summary>Archives</summary>
-        <label for="archive-capture-limit">Recent captures</label>
-        <select id="archive-capture-limit">
-          <option>5</option>
-          <option>10</option>
-          <option>20</option>
-        </select>
-        <p id="archive-capture-status" role="status"></p>
-        <ul id="archive-capture-list" aria-label="Recent Wayback captures"></ul>
+        <summary>Find saved copies</summary>
+        <section class="archive-card" aria-labelledby="wayback-provider-heading">
+          <h2 id="wayback-provider-heading">Wayback Machine</h2>
+          <p id="archive-capture-status" role="status"></p>
+          <ul id="archive-capture-list" aria-label="Recent Wayback captures"></ul>
+        </section>
+        <section class="archive-card" aria-labelledby="archive-today-heading">
+          <h2 id="archive-today-heading">Archive.today</h2>
+          <p id="archive-today-status" aria-live="polite">Enable Archive.today in Settings to use it.</p>
+          <button type="button" id="archive-today-browse" class="archive-action" disabled>Open snapshot search</button>
+        </section>
       </details>
 
       <div id="spn-container">
@@ -76,7 +82,7 @@
                   <div class="progress-bar progress-bar-striped active" role="progressbar">
                   </div>
                 </div>
-                <button id="spn-front-label">Save Page Now</button>
+                <button type="button" id="spn-front-label">Save to Wayback</button>
               </div>
             </div>
             <div class="flip-back">
@@ -95,6 +101,15 @@
           </label>
         </div>
       </div>
+
+      <div id="archive-today-actions" hidden>
+        <div class="archive-action-row">
+          <button type="button" id="archive-today-save" class="archive-action" disabled>Save to Archive.today</button>
+          <button type="button" id="archive-save-both" class="archive-action archive-action-primary" disabled>Save to both</button>
+        </div>
+        <p id="archive-action-help" class="archive-help">Archive.today opens in a tab and may publish the URL.</p>
+      </div>
+      <p id="archive-action-status" class="archive-help" role="status"></p>
 
       <div class="btn-flex-block">
         <button type="button" class="btn btn-sm btn-equal btn-light-gray not-sup-dim blocked-dim" id="oldest-btn"
@@ -213,9 +228,6 @@
 
       <hr>
       <div class="tab-bar">
-        <button tabindex="0" class="tab-item" id="settings-tab-btn">
-          <img src="images/fa/cog-solid.svg" class="tab-icon settings-icon-svg" title="Settings" alt="Settings">
-        </button>
         <button tabindex="0" class="tab-item" id="feedback-tab-btn">
           <img src="images/tabbar/feedback-icon.svg" class="tab-icon feedback-icon-svg" title="Write a Review"
             alt="Feedback">
@@ -253,6 +265,21 @@
     </div>
 
     <div id="first-panel" style="margin-bottom: 10px">
+      <fieldset id="archive-provider-settings">
+        <legend>Archive providers</legend>
+        <label for="archive-capture-limit">Recent copies per provider</label>
+        <input type="number" id="archive-capture-limit" min="1" max="30" step="1" value="5">
+        <label class="archive-setting-wide">
+          <input type="checkbox" id="archive-today-enabled"> Enable Archive.today
+        </label>
+        <label for="archive-today-mirror">Archive.today mirror</label>
+        <select id="archive-today-mirror">
+          <option value="archive.today">archive.today</option>
+          <option value="archive.is">archive.is</option>
+        </select>
+        <p class="archive-setting-wide archive-help">Search and save send the selected URL to the chosen mirror. Saves may become public.</p>
+      </fieldset>
+
       <label class="setting-switch" for="auto-archive-setting">
         <input type="checkbox" class="saved-setting private-setting" id="auto-archive-setting">
         <div class="setting-text-box">

@@ -1,14 +1,104 @@
-// Wayback Archives panel. Requests run only while the user has the panel open.
+// Archive controls and lookup. Wayback requests run only while the panel is open.
 {
   const panel = document.getElementById('archives-panel')
   const limit = document.getElementById('archive-capture-limit')
   const status = document.getElementById('archive-capture-status')
   const list = document.getElementById('archive-capture-list')
-  const storage = globalThis.browser?.storage || chrome.storage
-  const limits = ['5', '10', '20']
+  const api = globalThis.browser || chrome
+  const storage = api.storage
+  const enabled = document.getElementById('archive-today-enabled')
+  const mirror = document.getElementById('archive-today-mirror')
+  const todayStatus = document.getElementById('archive-today-status')
+  const browse = document.getElementById('archive-today-browse')
+  const save = document.getElementById('archive-today-save')
+  const saveBoth = document.getElementById('archive-save-both')
+  const actions = document.getElementById('archive-today-actions')
+  const actionStatus = document.getElementById('archive-action-status')
+  const actionHelp = document.getElementById('archive-action-help')
+  const keys = [
+    'archive_today_enabled', 'archive_today_mirror', 'archive_capture_limit',
+    'private_mode_setting', 'auto_exclude_list'
+  ]
   const cache = new Map()
   const ttl = 2 * 60 * 1000
   let pending
+  let settings = {}
+  let opening = false
+
+  function targetFor(url, preferences) {
+    if (preferences.private_mode_setting !== false) { return null }
+    return archiveTargetUrl(url, preferences.auto_exclude_list || defaultAutoExcludeList)
+  }
+
+  function updateActions() {
+    const active = settings.archive_today_enabled === true
+    const privateMode = settings.private_mode_setting !== false
+    const target = targetFor(activeURL, settings)
+    actions.hidden = !active
+    browse.disabled = !active || !target || opening
+    save.disabled = browse.disabled
+    saveBoth.disabled = browse.disabled || waybackSaving
+    actionHelp.textContent = privateMode
+      ? 'Turn off Private Mode to use Archive.today.'
+      : !target ? 'This URL is unsupported or excluded.'
+        : 'Archive.today opens a tab and may publish the URL.'
+    todayStatus.textContent = !active ? 'Enable Archive.today in Settings to use it.'
+      : privateMode ? 'Private Mode is on.'
+        : !target ? 'This URL is unsupported or excluded.'
+          : 'Availability unknown. Open the provider to check for copies.'
+  }
+
+  async function openArchiveToday(action) {
+    if (opening) { return }
+    const selected = activeURL
+    opening = true
+    updateActions()
+    actionStatus.textContent = ''
+    let waybackStarted = false
+    try {
+      const current = await storage.local.get(keys)
+      const target = selected === activeURL && targetFor(selected, current)
+      if (!target || current.archive_today_enabled !== true) {
+        actionStatus.textContent = 'Archive.today is disabled or the URL is excluded.'
+        return
+      }
+      const host = archiveTodayMirrors.includes(current.archive_today_mirror)
+        ? current.archive_today_mirror : archiveTodayMirrors[0]
+      const url = archiveTodayActionUrl(host, target, action === 'search' ? 'search' : 'save')
+      if (action === 'both') {
+        waybackStarted = startWaybackSave(target)
+        if (!waybackStarted) {
+          actionStatus.textContent = 'A Wayback save is already in progress.'
+          return
+        }
+      }
+      await api.tabs.create({ url })
+    } catch (error) {
+      actionStatus.textContent = waybackStarted
+        ? 'Wayback save requested. The Archive.today tab could not open.'
+        : 'Could not open the Archive.today tab.'
+    } finally {
+      opening = false
+      updateActions()
+    }
+  }
+
+  function applySettings(current) {
+    settings = current
+    limit.value = archiveCaptureLimit(current.archive_capture_limit)
+    enabled.checked = current.archive_today_enabled === true
+    mirror.value = archiveTodayMirrors.includes(current.archive_today_mirror)
+      ? current.archive_today_mirror : archiveTodayMirrors[0]
+    mirror.disabled = !enabled.checked
+    updateActions()
+  }
+
+  function saveSetting(values) {
+    storage.local.set(values).catch(() => {
+      actionStatus.textContent = 'Could not save archive settings.'
+      storage.local.get(keys).then(applySettings).catch(console.warn)
+    })
+  }
 
   function parseCaptures(payload) {
     if (!Array.isArray(payload)) { throw new Error('Invalid Wayback capture response') }
@@ -45,7 +135,9 @@
   }
 
   function render({ count, captures }) {
-    const availability = count.status !== 'fulfilled' ? 'Total unavailable' :
+    const hasRows = captures.status === 'fulfilled' && captures.value.length > 0
+    const availability = (count.status !== 'fulfilled' || (count.value.total === 0 && hasRows))
+      ? hasRows ? 'Copies found · total unavailable' : 'Total unavailable' :
       count.value.total < 0 ? 'Capture count blocked' : count.value.total === 1 ?
         '1 Wayback capture' : count.value.total.toLocaleString() + ' Wayback captures'
 
@@ -65,6 +157,7 @@
       link.textContent = day + ' ' + time + (capture.code ? ' · ' + capture.code : '')
       link.title = 'Open capture at ' + time + ' UTC'
       copy.type = 'button'
+      copy.className = 'archive-action'
       copy.textContent = 'Copy'
       copy.setAttribute('aria-label', 'Copy capture from ' + day + ' at ' + time + ' UTC')
       copy.addEventListener('click', async () => {
@@ -89,29 +182,28 @@
     pending = controller
     status.textContent = 'Checking Wayback…'
     try {
-      const keys = ['private_mode_setting', 'auto_exclude_list']
-      const settings = await storage.local.get(keys)
-      if (controller.signal.aborted) { return }
-      const original = getCleanUrl(activeURL)
-      if (settings.private_mode_setting !== false) {
+      const preferences = await storage.local.get(keys)
+      if (controller.signal.aborted || !panel.open) { return }
+      const original = isArchiveUrl(activeURL) ? getCleanUrl(activeURL) : activeURL
+      if (preferences.private_mode_setting !== false) {
         status.textContent = 'Turn off Private Mode to look up captures.'
         return
       }
-      if (!isNotExcludedUrl(original) || isUrlInList(original, settings.auto_exclude_list || defaultAutoExcludeList)) {
+      const url = targetFor(original, preferences)
+      if (!url) {
         status.textContent = 'This URL is unsupported or excluded.'
         return
       }
-      const url = new URL(original)
-      url.hash = ''
-      const key = JSON.stringify([url.href, limit.value])
+      const countLimit = archiveCaptureLimit(preferences.archive_capture_limit)
+      const key = JSON.stringify([url, countLimit])
       const saved = cache.get(key)
       if (saved && Date.now() - saved.at < ttl) {
         render(saved.result)
         return
       }
       const [count, captures] = await Promise.allSettled([
-        getWaybackSparkline(url.href, controller.signal),
-        getCaptures(url.href, limit.value, controller.signal)
+        getWaybackSparkline(url, controller.signal),
+        getCaptures(url, countLimit, controller.signal)
       ])
       if (controller.signal.aborted) { return }
       const result = { count, captures }
@@ -126,21 +218,30 @@
   }
 
   panel.addEventListener('toggle', refresh)
+  browse.addEventListener('click', () => openArchiveToday('search'))
+  save.addEventListener('click', () => openArchiveToday('save'))
+  saveBoth.addEventListener('click', () => openArchiveToday('both'))
+  enabled.addEventListener('change', () => saveSetting({ archive_today_enabled: enabled.checked }))
+  mirror.addEventListener('change', () => saveSetting({ archive_today_mirror: mirror.value }))
   limit.addEventListener('change', () => {
-    storage.local.set({ archive_capture_limit: limit.value }).catch(console.warn)
-    refresh()
+    limit.value = archiveCaptureLimit(limit.value)
+    saveSetting({ archive_capture_limit: limit.value })
   })
-  storage.local.get('archive_capture_limit').then(settings => {
-    if (limits.includes(settings.archive_capture_limit) && !panel.open) {
-      limit.value = settings.archive_capture_limit
-    }
-  }).catch(console.warn)
+  storage.local.get(keys).then(applySettings).catch(console.warn)
   storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && (changes.private_mode_setting || changes.auto_exclude_list)) {
+    if (area !== 'local' || !keys.some(key => key in changes)) { return }
+    if (changes.private_mode_setting || changes.auto_exclude_list) {
       panel.open = false
       pending?.abort()
       cache.clear()
     }
+    storage.local.get(keys).then(applySettings).catch(console.warn)
   })
+  document.addEventListener('archive-target-changed', () => {
+    actionStatus.textContent = ''
+    updateActions()
+    if (panel.open) { refresh() }
+  })
+  document.addEventListener('archive-save-state-changed', updateActions)
   window.addEventListener('pagehide', () => pending?.abort())
 }

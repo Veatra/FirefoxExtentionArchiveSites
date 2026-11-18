@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Wayback Machine",
   "version": "3.4.8",
-  "description": "The Official Wayback Machine Extension - by the Internet Archive.",
+  "description": "An independent fork for finding and saving copies with Wayback Machine and Archive.today.",
   "icons": {
     "16": "images/app-icon/mini-icon16.png",
     "24": "images/app-icon/mini-icon24.png",
@@ -30,7 +30,7 @@
       "strict_min_version": "115.0",
       "data_collection_permissions": {
         "required": [
-          "none"
+          "browsingActivity"
         ],
         "optional": []
       }

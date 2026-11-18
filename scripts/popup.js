@@ -9,6 +9,13 @@ let searchBoxTimer
 
 // don't reference in setup functions as there's a delay in assignment
 let activeURL, activeTab
+let waybackSaving = false
+
+function setActiveURL(url) {
+  if (activeURL === url) { return }
+  activeURL = url
+  document.dispatchEvent(new Event('archive-target-changed'))
+}
 const knownCaptureTimes = new Map()
 
 const ERROR_CODE_DIC = {
@@ -64,11 +71,11 @@ function showSettingsTabTip() {
 
 function initActiveTabURL() {
   activeTab = null
-  activeURL = null
+  setActiveURL(null)
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs && tabs[0]) {
       activeTab = tabs[0]
-      activeURL = tabs[0].url
+      setActiveURL(tabs[0].url)
       setupSaveAction(activeURL)
     }
   })
@@ -123,34 +130,32 @@ async function spnSystemStatus() {
 }
 
 function doSaveNow() {
+  startWaybackSave(activeURL)
+}
+
+function startWaybackSave(url) {
+  if (waybackSaving || !isNotExcludedUrl(url) || isArchiveUrl(url)) { return false }
   spnStatusRequest?.abort()
   $('#spn-system-status-msg').empty()
-  const url = activeURL
-  if (url && isValidUrl(url) && isNotExcludedUrl(url) && !isArchiveUrl(url)) {
-    let options = { 'capture_all': 1 }
-    if ($('#chk-outlinks').prop('checked') === true) {
-      options['capture_outlinks'] = 1
-    }
-    if ($('#email-results-setting').prop('checked') === true) {
-      options['email_result'] = 1
-    }
-    if ($('#chk-screenshot').prop('checked') === true) {
-      options['capture_screenshot'] = 1
-    }
+  showSaving()
 
-    chrome.runtime.sendMessage({
-      message: 'saveurl',
-      page_url: url,
-      options,
-      atab: activeTab
-    }, checkLastError)
+  const options = { capture_all: 1 }
+  if ($('#chk-outlinks').prop('checked')) { options.capture_outlinks = 1 }
+  if ($('#email-results-setting').prop('checked')) { options.email_result = 1 }
+  if ($('#chk-screenshot').prop('checked')) { options.capture_screenshot = 1 }
 
-    // animate SPN button only if logged in
-    checkAuthentication((result) => {
-      checkLastError()
-      if (result && result.auth_check) { showSaving() }
-    })
-  }
+  chrome.runtime.sendMessage({
+    message: 'saveurl',
+    page_url: url,
+    options,
+    atab: activeTab
+  }, (response) => {
+    if (chrome.runtime.lastError || !response?.accepted) {
+      $('#spn-system-status-msg').text('Could not start the Wayback save.')
+      enableAfterSaving()
+    }
+  })
+  return true
 }
 
 // Update UI depending on logged-in state.
@@ -348,7 +353,7 @@ function useSearchURL(flag) {
     $('#using-search-msg').hide()
     // reassign activeURL
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      activeURL = (tabs?.[0]) ? tabs[0].url : null
+      setActiveURL(tabs?.[0]?.url || null)
     })
   }
 }
@@ -361,7 +366,7 @@ function setupSearchBox() {
     if (!((e.key === 'ArrowUp') || (e.key === 'ArrowDown')) && (search_box.value.length >= 0)) {
       const url = makeValidURL(search_box.value)
       if (url && isNotExcludedUrl(url) && !isArchiveUrl(url)) {
-        activeURL = url
+        setActiveURL(url)
         useSearchURL(true)
       } else {
         useSearchURL(false)
@@ -435,7 +440,7 @@ function display_list(key_word) {
         $('#suggestion-box').append(
           $('<div>').attr('role', 'button').text(data.hosts[i].display_name).click((event) => {
             document.getElementById('search-input').value = event.currentTarget.textContent
-            activeURL = getCleanUrl(makeValidURL(event.currentTarget.textContent))
+            setActiveURL(getCleanUrl(makeValidURL(event.currentTarget.textContent)))
             if (activeURL) { useSearchURL(true) }
           })
         )
@@ -826,6 +831,7 @@ function setupSaveButton() {
 function showSaving(count) {
   $('#save-progress-bar').show()
   $('#spn-btn').off('click')
+  $('#spn-front-label').prop('disabled', true)
   disableWhileSaving()
   const text = $('#spn-front-label').text()
   if (count) {
@@ -837,48 +843,46 @@ function showSaving(count) {
 }
 
 function disableWhileSaving() {
+  waybackSaving = true
+  document.dispatchEvent(new Event('archive-save-state-changed'))
   $('#search-input, #chk-outlinks, #chk-screenshot').prop('disabled', true)
 }
 
 function enableAfterSaving() {
+  waybackSaving = false
+  $('#spn-btn').off('click').on('click', doSaveNow)
+  $('#save-progress-bar').hide()
+  $('#spn-front-label').text('Save to Wayback').prop('disabled', false)
+  document.dispatchEvent(new Event('archive-save-state-changed'))
   $('#search-input, #chk-outlinks, #chk-screenshot').prop('disabled', false)
 }
 
 // respond to Save Page Now success
 function setupSaveListener() {
   chrome.runtime.onMessage.addListener((message) => {
-    if (message.url !== activeURL) {
+    if (message.url !== activeURL && message.url !== archiveTargetUrl(activeURL)) {
       return
     }
     if (message.message === 'save_success') {
       knownCaptureTimes.set(message.url, message.timestamp)
-      $('#save-progress-bar').hide()
-      $('#spn-front-label').text('Save successful')
+      $('#spn-system-status-msg').text('Wayback save complete.')
       $('#last-saved-msg').text('Last Saved ' + viewableTimestamp(message.timestamp)).show()
       $('#spn-btn').removeClass('flip-inside')
       setupWaybackCount()
       enableAfterSaving()
     } else if (message.message === 'save_archived') {
       // snapshot already archived within timeframe
-      $('#save-progress-bar').hide()
-      $('#spn-front-label').text('Recently Saved')
-      $('#spn-btn').attr('title', message.error)
+      $('#spn-system-status-msg').text(message.error || 'Wayback already saved this URL recently.')
       enableAfterSaving()
     } else if (message.message === 'slow_archive_msg') {
       // the snapshot archiving process will start in some time
-      $('#save-progress-bar').hide()
-      $('#spn-front-label').text('Processing')
-      $('#spn-btn').attr('title', message.error)
+      showSaving()
       $('#spn-system-status-msg').text(message.error)
-      enableAfterSaving()
       spnSystemStatus()
     } else if (message.message === 'save_start') {
       showSaving()
     } else if (message.message === 'save_error') {
-      $('#save-progress-bar').hide()
-      $('#spn-front-label').text('Save Failed')
-      $('#spn-btn').attr('title', message.error)
-      $('#spn-system-status-msg').text(message.error)
+      $('#spn-system-status-msg').text(message.error || 'The Wayback save did not complete.')
       enableAfterSaving()
       spnSystemStatus()
     } else if ((message.message === 'resource_list_show')) {

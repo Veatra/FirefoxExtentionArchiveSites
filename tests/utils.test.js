@@ -3,7 +3,10 @@ const test = require('node:test')
 
 globalThis.isInTestEnv = true
 Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'Firefox/115.0' } })
-const { fetchWithTimeout, getTabKey, isNotExcludedUrl, isUrlInList, matchWildcard, normalizeExcludePattern } =
+const {
+  archiveCaptureLimit, archiveTargetUrl, archiveTodayActionUrl, fetchWithTimeout, getCleanUrl,
+  getTabKey, isNotExcludedUrl, isUrlInList, matchWildcard, normalizeExcludePattern
+} =
   require('../scripts/utils.js')
 
 test('classifies canonical and alternate local addresses without DNS', () => {
@@ -62,5 +65,39 @@ test('request deadline aborts a stalled response body', async () => {
     await assert.rejects(fetchWithTimeout('https://example.org/', {}, undefined, 10), { name: 'AbortError' })
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+test('third-party archive actions keep their mirror and the intended public URL', () => {
+  const target = archiveTargetUrl('https://example.org/page?a=1&run=2#section')
+  assert.equal(target, 'https://example.org/page?a=1&run=2')
+  const search = new URL(archiveTodayActionUrl('archive.is', target, 'search'))
+  assert.equal(search.origin, 'https://archive.is')
+  assert.equal(search.pathname, '/search/')
+  assert.equal(search.searchParams.get('q'), target)
+  const save = new URL(archiveTodayActionUrl('archive.today', target, 'save'))
+  assert.equal(save.origin, 'https://archive.today')
+  assert.equal(save.searchParams.get('run'), '1')
+  assert.equal(save.searchParams.get('url'), target)
+  assert.equal(archiveTodayActionUrl('archive.is.example.org', target, 'save'), null)
+  assert.equal(archiveTargetUrl('http://0x7f000001/'), null)
+  assert.equal(archiveTargetUrl('https://archive.is/example'), null)
+  assert.equal(archiveTargetUrl('https://web.archive.org/web/2/https://example.org'), null)
+  assert.equal(archiveTargetUrl(target, ['EXAMPLE.ORG/*']), null)
+})
+
+test('only rewrites URLs on actual archive or extension pages', () => {
+  const ordinary = 'https://example.org/?note=extension:&url=https://do-not-send.example.org/'
+  assert.equal(getCleanUrl(ordinary), ordinary)
+  assert.equal(getCleanUrl('https://web.archive.org/web/2/https://example.org/'), 'https://example.org/')
+  assert.equal(getCleanUrl('moz-extension://abc/annotations.html?url=https%3A%2F%2Fexample.org%2F'), 'https://example.org/')
+})
+
+test('capture limit respects previously saved values and the new range', () => {
+  assert.equal(archiveCaptureLimit('10'), 10)
+  assert.equal(archiveCaptureLimit('30'), 30)
+  assert.equal(archiveCaptureLimit(1), 1)
+  for (const invalid of ['', 0, 31, 2.5, true, undefined]) {
+    assert.equal(archiveCaptureLimit(invalid), 5)
   }
 })
