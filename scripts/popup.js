@@ -417,7 +417,15 @@ function arrow_key_access() {
 
 function display_list(key_word) {
   $('#suggestion-box').text('').hide()
-  $.getJSON(hostURL + '__wb/search/host?q=' + key_word, (data) => {
+  chrome.storage.local.get(['private_mode_setting'], async settings => {
+    if (settings?.private_mode_setting !== false || !key_word) { return }
+    let data
+    try {
+      data = await fetchWithTimeout(hostURL + '__wb/search/host?q=' + fixedEncodeURIComponent(key_word))
+    } catch (error) {
+      return
+    }
+    if (!Array.isArray(data?.hosts) || $('#search-input').val() !== key_word) { return }
     $('#suggestion-box').text('').hide()
     if (data.hosts.length > 0 && $('#search-input').val() !== '') {
       $('#suggestion-box').show()
@@ -493,12 +501,14 @@ function openURLs() {
 }
 
 function showSettings() {
+  document.getElementById('archives-panel').open = false
   $('#popup-page, #login-page').hide()
   $('#setting-page').show()
 }
 
 function showLoginPage(e) {
   e.preventDefault()
+  document.getElementById('archives-panel').open = false
   $('#popup-page, #setting-page, #login-message').hide()
   $('#login-page').show()
 }
@@ -575,13 +585,13 @@ function setupReadBook() {
           let state = new Set(result?.stateArray ?? []);
           if (state.has('R')) {
             $('#readbook-container').show()
-            chrome.storage.local.get(['tab_url', 'detail_url', 'view_setting'], (settings) => {
-              if (!settings) { return }
+            chrome.storage.local.get(['private_mode_setting', 'tab_url', 'detail_url', 'view_setting'], (settings) => {
+              if (settings?.private_mode_setting !== false) { return }
               const stored_url = settings.tab_url
               const detail_url = settings.detail_url
               const context = settings.view_setting
               // Checking if the tab url is the same as the last stored one
-              if (stored_url === url) {
+              if (stored_url === url && isValidUrl(detail_url)) {
                 // if same, use the previously fetched url
                 $('#readbook-btn').click(() => {
                   openByWindowSetting(detail_url, context)
@@ -590,19 +600,15 @@ function setupReadBook() {
                 // if not, fetch it again
                 let headers = new Headers(hostHeaders)
                 headers.set('backend', 'nomad')
-                fetch(hostURL + 'services/context/amazonbooks?url=' + url, {
-                  method: 'GET',
-                  headers
-                })
-                .then(res => res.json())
+                fetchWithTimeout(hostURL + 'services/context/amazonbooks?url=' + fixedEncodeURIComponent(url), { headers })
                 .then(response => {
-                  if (response['metadata'] && response['metadata']['identifier-access']) {
-                    const new_details_url = response['metadata']['identifier-access']
+                  const new_details_url = response?.metadata?.['identifier-access']
+                  if (isValidUrl(new_details_url)) {
                     $('#readbook-btn').click(() => {
                       openByWindowSetting(new_details_url, context)
                     })
                   }
-                })
+                }).catch(error => console.warn('Could not look up Archive.org book', error))
               }
             })
           }

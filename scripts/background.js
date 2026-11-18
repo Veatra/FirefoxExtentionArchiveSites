@@ -772,19 +772,15 @@ chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
           if (url.includes('www.amazon') && url.includes('/dp/')) {
             let headers = new Headers(hostHeaders)
             headers.set('backend', 'nomad')
-            fetch(hostURL + 'services/context/amazonbooks?url=' + url, {
-              method: 'GET',
-              headers
-            })
-            .then(resp => resp.json())
+            fetchWithTimeout(hostURL + 'services/context/amazonbooks?url=' + fixedEncodeURIComponent(url), { headers })
             .then(async (resp) => {
               if (resp?.metadata?.identifier || resp?.ocaid) {
                 await addToolbarState(tab, 'R')
                 // Storing the tab url as well as the fetched archive url for future use
                 // TODO: may want to redo this?
-                chrome.storage.local.set({ 'tab_url': url, 'detail_url': resp['metadata']['identifier-access'] }, () => {})
+                chrome.storage.local.set({ 'tab_url': url, 'detail_url': resp.metadata?.['identifier-access'] || null }, () => {})
               }
-            })
+            }).catch(error => console.warn('Could not look up Archive.org book', error))
           }
         }
 
