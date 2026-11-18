@@ -5,7 +5,7 @@ globalThis.isInTestEnv = true
 Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'Firefox/115.0' } })
 const {
   archiveCaptureLimit, archiveTargetUrl, archiveTodayActionUrl, autoSaveIntervalHours, fetchWithTimeout, getCleanUrl,
-  getTabKey, isNotExcludedUrl, isUrlInList, matchWildcard, normalizeExcludePattern
+  getTabKey, isNotExcludedUrl, isUrlInList, matchWildcard, migrateArchivePreferences, normalizeExcludePattern
 } =
   require('../scripts/utils.js')
 
@@ -116,4 +116,23 @@ test('auto-save intervals preserve existing presets and validate custom units an
   assert.equal(custom(0, 'days'), null)
   assert.equal(custom(1.5, 'hours'), null)
   assert.equal(custom(2, 'minutes'), null)
+})
+
+test('migrates the legacy email choice without overwriting current settings', () => {
+  const existing = { settings_schema_version: 1, email_outlinks_setting: true, auto_exclude_list: [] }
+  assert.deepEqual(migrateArchivePreferences(existing), { email_results_setting: true })
+  assert.deepEqual(migrateArchivePreferences({ ...existing, email_results_setting: false }), {})
+})
+
+test('updates the historical default exclusion list only on a known 3.2 upgrade', () => {
+  const auto_exclude_list = [
+    'archive.org*', 'web.archive.org*', 'google.com*', '*.google.com*',
+    'mail.yahoo.com*', 'duckduckgo.com/?q=*'
+  ]
+  const existing = { settings_schema_version: 1, auto_exclude_list }
+  assert.deepEqual(migrateArchivePreferences(existing, '3.4.8'), {})
+  assert.deepEqual(migrateArchivePreferences({ ...existing, auto_exclude_list: [] }, '3.2'), {})
+  const updated = migrateArchivePreferences(existing, '3.2')
+  assert.equal(updated.auto_exclude_list.length, 8)
+  assert.deepEqual(migrateArchivePreferences({ ...existing, ...updated }, '3.2'), {})
 })

@@ -445,7 +445,22 @@ chrome.runtime.onStartup.addListener((details) => {
 })
 
 // Runs when extension first installed or updated, or browser updated.
+let archivePreferencesMigration = Promise.resolve()
+
+function scheduleArchivePreferencesMigration(previousVersion) {
+  archivePreferencesMigration = archivePreferencesMigration.then(async () => {
+    const items = await chrome.storage.local.get([
+      'settings_schema_version', 'email_outlinks_setting', 'email_results_setting', 'auto_exclude_list'
+    ])
+    const updates = migrateArchivePreferences(items, previousVersion)
+    if (Object.keys(updates).length) { await chrome.storage.local.set(updates) }
+  }).catch(error => console.warn('Could not migrate archive preferences', error))
+}
+
+scheduleArchivePreferencesMigration()
+
 chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'update') { scheduleArchivePreferencesMigration(details.previousVersion) }
   if (details.reason === 'install') {
     initDefaultOptions()
     initAutoExcludeList()

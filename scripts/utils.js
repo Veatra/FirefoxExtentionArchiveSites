@@ -4,13 +4,17 @@
 /*   global isInTestEnv */
 
 // default exclude list for auto-save
-const defaultAutoExcludeList = [
+const v32AutoExcludeList = [
   'archive.org*',
   'web.archive.org*',
   'google.com*',
   '*.google.com*',
   'mail.yahoo.com*',
-  'duckduckgo.com/?q=*',
+  'duckduckgo.com/?q=*'
+]
+
+const defaultAutoExcludeList = [
+  ...v32AutoExcludeList,
   '*.discord.com/api/webhooks/*',
   '*.proton.me*'
 ]
@@ -832,6 +836,22 @@ function attachTooltip (anchor, tooltip, pos = 'right', time = 200) {
   })
 }
 
+function migrateArchivePreferences(items, previousVersion) {
+  if (Number(items.settings_schema_version) > 1) { return {} }
+  const updates = items.settings_schema_version === 1 ? {} : { settings_schema_version: 1 }
+  if (items.email_results_setting === undefined && typeof items.email_outlinks_setting === 'boolean') {
+    updates.email_results_setting = items.email_outlinks_setting
+  }
+  const excludes = items.auto_exclude_list
+  const hasUnchangedV32Defaults = previousVersion === '3.2' &&
+    Array.isArray(excludes) && excludes.length === v32AutoExcludeList.length &&
+    v32AutoExcludeList.every(pattern => excludes.includes(pattern))
+  if (excludes === undefined || hasUnchangedV32Defaults) {
+    updates.auto_exclude_list = defaultAutoExcludeList
+  }
+  return updates
+}
+
 // Saves the defaultAutoExcludeList[] to storage if 'auto_exclude_list' hasn't been set.
 function initAutoExcludeList() {
   chrome.storage.local.get(['auto_exclude_list'], (items) => {
@@ -970,6 +990,7 @@ if (typeof module !== 'undefined') {
     dateToTimestamp,
     viewableTimestamp,
     initAutoExcludeList,
+    migrateArchivePreferences,
     initDefaultOptions,
     afterAcceptTerms,
     feedbackURL,

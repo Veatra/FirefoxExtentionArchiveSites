@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve the v3.2 Email Outlinks choice during upgrade and refresh untouched v3.2 exclusions.
+
 - Add versioned settings backup, merge, and replace.
 - Add opt-in local auto-save activity with export and clear controls.
 - Clean up orphaned tab records on background wake and retain the save error when a service status check fails.
