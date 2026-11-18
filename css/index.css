@@ -614,7 +614,14 @@ body {
     color: var(--archive-muted);
 }
 
-#archive-action-status:empty { display: none; }
+#archive-action-status:empty, #archive-target:empty { display: none; }
+
+.archive-target {
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 #archive-capture-list {
     list-style: none;

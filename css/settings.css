@@ -147,3 +147,19 @@ label[for=tagcloud] {
     }
 
 }
+
+body.standalone-settings {
+    width: min(100%, 580px);
+    margin: 1rem auto;
+}
+
+.auto-archive-controls {
+    margin: .25rem 0 0 1.55rem;
+}
+
+.auto-archive-controls > * {
+    margin-top: .2rem;
+}
+
+#auto-archive-value { width: 5rem; }
+#auto-archive-settings-status:empty { display: none; }

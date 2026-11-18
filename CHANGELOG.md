@@ -3,7 +3,9 @@
 ## Unreleased
 
 - Add opt-in Archive.today and archive.is search and saving, including Save to both.
-- Widen the popup, separate provider results, and add a configurable recent-copy limit in Settings.
+- Widen the popup, separate provider results, and add a configurable recent-copy limit in Settings. Show Wayback results as they arrive.
+- Add full-tab settings through the add-on manager and an Open in tab button in the popup.
+- Add a custom auto-save interval in hours or days and keep interval changes separate from enabling auto-save.
 - Keep save feedback separate from the Wayback save button so the next action is clear.
 
 - Raise the Firefox minimum to ESR 115 and load shared background helpers before listeners.

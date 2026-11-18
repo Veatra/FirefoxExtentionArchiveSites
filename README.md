@@ -20,3 +20,7 @@ Run `node --test tests/utils.test.js` with Node 20 or newer. If Mozilla's `web-e
 - Archive.today availability is shown as unknown. **Open snapshot search** opens the mirror's search results. The popup has no reliable source for its capture count or recent history.
 
 Private Mode and exclusions block Archive.today actions. Archive.today is off by default. See [PRIVACY-DELTA.md](PRIVACY-DELTA.md).
+
+## Settings
+
+Open Settings from the popup or the add-on manager. **Open in tab** makes more room for editing. Under **Auto Save Page**, the interval can be set to 1 hour through 365 days. Changing the interval leaves the Auto Save Page switch as it was. The **at any time** option saves only URLs without a known copy.

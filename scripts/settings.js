@@ -35,49 +35,72 @@ function restoreSettings(items) {
   $('#tvnews-setting').prop('checked', items.tvnews_setting)
   // second panel
   $('#auto-archive-setting').prop('checked', items.auto_archive_setting)
-  $('#auto-archive-age').val(items.auto_archive_age || '99999')
+  const savedAge = String(items.auto_archive_age ?? '99999')
+  if (Array.from(document.getElementById('auto-archive-age').options).some(option => option.value === savedAge)) {
+    $('#auto-archive-age').val(savedAge)
+  }
+  if (customAutoSaveHours(items.auto_archive_custom_value, items.auto_archive_custom_unit) !== null) {
+    $('#auto-archive-value').val(items.auto_archive_custom_value)
+    $('#auto-archive-unit').val(items.auto_archive_custom_unit)
+  }
+  updateAutoArchiveControls()
   $('#auto-bookmark-setting').prop('checked', items.auto_bookmark_setting)
   $('#email-results-setting').prop('checked', items.email_results_setting)
   $('#my-archive-setting').prop('checked', items.my_archive_setting)
   $('#resource-list-setting').prop('checked', items.resource_list_setting)
   $('#notify-setting').prop('checked', items.notify_setting)
   $('#embed-popup-setting').prop('checked', items.embed_popup_setting)
-  $(`input[name=view-setting-input][value=${items.view_setting}]`).prop('checked', true)
+  $('input[name=view-setting-input]').val([items.view_setting || 'tab'])
   // update UI
   enableEmbedPopupSetting(items.not_found_setting)
 }
 
-function saveSettings() {
-  let settings = {
-    // SPN
-    spn_outlinks: $('#chk-outlinks').prop('checked'),
-    spn_screenshot: $('#chk-screenshot').prop('checked'),
-    // first panel
-    private_mode_setting: $('#private-mode-setting').prop('checked'),
-    not_found_setting: $('#not-found-setting').prop('checked'),
-    wm_count_setting: $('#wm-count-setting').prop('checked'),
-    fact_check_setting: $('#fact-check-setting').prop('checked'),
-    wiki_setting: $('#wiki-setting').prop('checked'),
-    amazon_setting: $('#amazon-setting').prop('checked'),
-    tvnews_setting: $('#tvnews-setting').prop('checked'),
-    // second panel
-    auto_archive_setting: $('#auto-archive-setting').prop('checked'),
-    auto_archive_age: $('#auto-archive-age').val(),
-    auto_bookmark_setting: $('#auto-bookmark-setting').prop('checked'),
-    email_results_setting: $('#email-results-setting').prop('checked'),
-    my_archive_setting: $('#my-archive-setting').prop('checked'),
-    resource_list_setting: $('#resource-list-setting').prop('checked'),
-    notify_setting: $('#notify-setting').prop('checked'),
-    embed_popup_setting: $('#embed-popup-setting').prop('checked'),
-    view_setting: $('input[name=view-setting-input]:checked').val()
+function saveSettingChange(event) {
+  const control = event.target
+  const names = { 'chk-screenshot': 'spn_screenshot', 'chk-outlinks': 'spn_outlinks' }
+  const key = control.name === 'view-setting-input'
+    ? 'view_setting' : names[control.id] || control.id.replaceAll('-', '_')
+  const value = control.type === 'checkbox' ? control.checked : control.value
+  const settings = { [key]: value }
+  if (value === true && control.classList.contains('private-setting')) {
+    settings.private_mode_setting = false
   }
   chrome.storage.local.set(settings)
 }
 
-// clears settings that should be clear when logged out.
+function updateAutoArchiveControls() {
+  document.getElementById('auto-archive-custom').hidden = $('#auto-archive-age').val() !== 'custom'
+  $('#auto-archive-value').attr('max', $('#auto-archive-unit').val() === 'days' ? '365' : '8760')
+}
+
+function saveAutoArchiveInterval() {
+  updateAutoArchiveControls()
+  const age = $('#auto-archive-age').val()
+  const values = { auto_archive_age: age }
+  const status = $('#auto-archive-settings-status')
+  if (age === 'custom') {
+    const value = $('#auto-archive-value').val()
+    const unit = $('#auto-archive-unit').val()
+    if (customAutoSaveHours(value, unit) === null) {
+      status.text('Enter a whole interval between 1 hour and 365 days.')
+      return
+    }
+    values.auto_archive_custom_value = Number(value)
+    values.auto_archive_custom_unit = unit
+  }
+  status.empty()
+  chrome.storage.local.set(values)
+}
+
+// Clear only the settings that depend on signing in.
 function clearSettingsOnLogout() {
   $('.clear-on-logout').prop('checked', false)
-  saveSettings()
+  chrome.storage.local.set({
+    spn_outlinks: false,
+    spn_screenshot: false,
+    email_results_setting: false,
+    my_archive_setting: false
+  })
 }
 
 function setupPrivateMode() {
@@ -114,14 +137,8 @@ function enableEmbedPopupSetting(flag) {
 // Save settings on change and other actions on particular settings.
 function setupSettingsChange() {
 
-  // save settings whenever one changes
-  $('.saved-setting').change(saveSettings)
-
-  // auto save page
-  $('#auto-archive-age').change((e) => {
-    $('#auto-archive-setting').prop('checked', true).trigger('change')
-    e.target.blur()
-  })
+  $('.saved-setting').change(saveSettingChange)
+  $('#auto-archive-age, #auto-archive-value, #auto-archive-unit').change(saveAutoArchiveInterval)
 
   // auto save bookmarks
   if (isSafari) {
@@ -139,7 +156,7 @@ function setupSettingsChange() {
             // Permissions popup will cause main popup to disappear, preventing this code from running.
             // Fixed by saving auto_bookmark_setting to true in background.js when permission granted.
             $('#auto-bookmark-setting').prop('checked', true)
-            saveSettings()
+            chrome.storage.local.set({ auto_bookmark_setting: true })
           }
         })
       }

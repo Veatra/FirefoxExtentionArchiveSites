@@ -514,6 +514,24 @@ function archiveTodayActionUrl(mirror, target, action) {
   return url.href
 }
 
+function customAutoSaveHours(value, unit) {
+  if (unit !== 'hours' && unit !== 'days') { return null }
+  if (typeof value !== 'string' && typeof value !== 'number') { return null }
+  const amount = Number(value)
+  const hours = amount * (unit === 'days' ? 24 : 1)
+  return Number.isInteger(amount) && hours >= 1 && hours <= 8760 ? hours : null
+}
+
+function autoSaveIntervalHours(settings) {
+  const age = settings?.auto_archive_age
+  if (age === 'custom') {
+    return customAutoSaveHours(settings.auto_archive_custom_value, settings.auto_archive_custom_unit)
+  }
+  if (String(age) === '99999') { return null }
+  const days = Number(age)
+  return Number.isInteger(days) && days >= 1 && days <= 365 ? days * 24 : null
+}
+
 function archiveCaptureLimit(value) {
   if (typeof value !== 'number' && typeof value !== 'string') { return 5 }
   const limit = Number(value)
@@ -914,6 +932,8 @@ if (typeof module !== 'undefined') {
     archiveTargetUrl,
     archiveTodayActionUrl,
     archiveCaptureLimit,
+    autoSaveIntervalHours,
+    customAutoSaveHours,
     wmAvailabilityCheck,
     openByWindowSetting,
     sleep,

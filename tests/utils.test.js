@@ -4,7 +4,7 @@ const test = require('node:test')
 globalThis.isInTestEnv = true
 Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'Firefox/115.0' } })
 const {
-  archiveCaptureLimit, archiveTargetUrl, archiveTodayActionUrl, fetchWithTimeout, getCleanUrl,
+  archiveCaptureLimit, archiveTargetUrl, archiveTodayActionUrl, autoSaveIntervalHours, fetchWithTimeout, getCleanUrl,
   getTabKey, isNotExcludedUrl, isUrlInList, matchWildcard, normalizeExcludePattern
 } =
   require('../scripts/utils.js')
@@ -100,4 +100,20 @@ test('capture limit respects previously saved values and the new range', () => {
   for (const invalid of ['', 0, 31, 2.5, true, undefined]) {
     assert.equal(archiveCaptureLimit(invalid), 5)
   }
+})
+
+test('auto-save intervals preserve existing presets and validate custom units and limits', () => {
+  assert.equal(autoSaveIntervalHours({ auto_archive_age: '99999' }), null)
+  assert.equal(autoSaveIntervalHours({ auto_archive_age: '90' }), 2160)
+  assert.equal(autoSaveIntervalHours({ auto_archive_age: '1' }), 24)
+  const custom = (value, unit) => autoSaveIntervalHours({
+    auto_archive_age: 'custom', auto_archive_custom_value: value, auto_archive_custom_unit: unit
+  })
+  assert.equal(custom(1, 'hours'), 1)
+  assert.equal(custom(2, 'days'), 48)
+  assert.equal(custom(365, 'days'), 8760)
+  assert.equal(custom(8761, 'hours'), null)
+  assert.equal(custom(0, 'days'), null)
+  assert.equal(custom(1.5, 'hours'), null)
+  assert.equal(custom(2, 'minutes'), null)
 })

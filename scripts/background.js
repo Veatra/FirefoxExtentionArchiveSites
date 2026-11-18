@@ -710,19 +710,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
   if (info.status === 'complete') {
     updateWaybackCountBadge(tab, url)
 
-    chrome.storage.local.get(['private_mode_setting', 'not_found_setting', 'auto_archive_setting', 'auto_archive_age', 'fact_check_setting', 'wiki_setting'], async (settings) => {
+    chrome.storage.local.get([
+      'private_mode_setting', 'not_found_setting', 'auto_archive_setting', 'auto_archive_age',
+      'auto_archive_custom_value', 'auto_archive_custom_unit', 'fact_check_setting', 'wiki_setting'
+    ], async (settings) => {
       if (settings?.private_mode_setting !== false) { return }
-      // auto save page
-      if (settings?.auto_archive_setting) {
-        let beforeDate = null
-        if (settings.auto_archive_age) {
-          // auto_archive_age is an int of days before now
-          const days = parseInt(settings.auto_archive_age, 10)
-          if (!isNaN(days)) {
-            const milisecs = days * 24 * 60 * 60 * 1000
-            beforeDate = new Date(Date.now() - milisecs)
-          }
-        }
+      if (settings.auto_archive_setting) {
+        const hours = autoSaveIntervalHours(settings)
+        const beforeDate = hours === null ? null : new Date(Date.now() - hours * 60 * 60 * 1000)
         await autoSave(tab, url, beforeDate)
       }
 

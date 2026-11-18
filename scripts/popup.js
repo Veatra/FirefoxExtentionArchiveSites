@@ -6,6 +6,7 @@
 /*   global attachTooltip, checkLastError, cropPrefix, cropScheme, hostHeaders, fetchWithTimeout, getUserInfo, checkAuthentication */
 
 let searchBoxTimer
+const standaloneSettings = new URLSearchParams(window.location.search).get('view') === 'settings'
 
 // don't reference in setup functions as there's a delay in assignment
 let activeURL, activeTab
@@ -538,6 +539,7 @@ function showLoginFromSettings(e) {
 
 // Returns to the main view.
 function goBackToMain() {
+  if (standaloneSettings) { goBackToSettings(); return }
   $('#login-page, #setting-page').hide()
   $('#popup-page').show()
   $('.back-btn').off('click').on('click', goBackToMain)
@@ -898,6 +900,15 @@ function setupSaveListener() {
 // onload
 $(function() {
   $('#setting-page, #login-page').hide()
+  if (standaloneSettings) {
+    document.title = 'Web Archives Settings'
+    document.body.classList.add('standalone-settings')
+    $('#open-settings-tab, #setting-page .back-btn').hide()
+    showSettings()
+    setupLoginState()
+    return
+  }
+  $('#open-settings-tab').click(() => chrome.runtime.openOptionsPage())
   initAgreement()
   initActiveTabURL()
   setupViewArchived()

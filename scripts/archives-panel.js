@@ -8,6 +8,7 @@
   const storage = api.storage
   const enabled = document.getElementById('archive-today-enabled')
   const mirror = document.getElementById('archive-today-mirror')
+  const selectedTarget = document.getElementById('archive-target')
   const todayStatus = document.getElementById('archive-today-status')
   const browse = document.getElementById('archive-today-browse')
   const save = document.getElementById('archive-today-save')
@@ -34,6 +35,9 @@
     const active = settings.archive_today_enabled === true
     const privateMode = settings.private_mode_setting !== false
     const target = targetFor(activeURL, settings)
+    const address = archiveTargetUrl(isArchiveUrl(activeURL) ? getCleanUrl(activeURL) : activeURL)
+    selectedTarget.textContent = address ? 'Page: ' + address : ''
+    selectedTarget.title = address || ''
     actions.hidden = !active
     browse.disabled = !active || !target || opening
     save.disabled = browse.disabled
@@ -134,17 +138,28 @@
     })
   }
 
-  function render({ count, captures }) {
+  function renderStatus({ count, captures }) {
     const hasRows = captures.status === 'fulfilled' && captures.value.length > 0
-    const availability = (count.status !== 'fulfilled' || (count.value.total === 0 && hasRows))
-      ? hasRows ? 'Copies found · total unavailable' : 'Total unavailable' :
-      count.value.total < 0 ? 'Capture count blocked' : count.value.total === 1 ?
-        '1 Wayback capture' : count.value.total.toLocaleString() + ' Wayback captures'
+    let availability
+    if (count.status === 'pending') {
+      availability = hasRows ? 'Copies found · checking total…' : 'Checking total…'
+    } else if (count.status === 'rejected' || (count.value.total === 0 && hasRows)) {
+      availability = hasRows ? 'Copies found · total unavailable' : 'Total unavailable'
+    } else if (count.value.total < 0) {
+      availability = 'Capture count blocked'
+    } else {
+      const total = count.value.total
+      availability = total.toLocaleString() + (total === 1 ? ' Wayback capture' : ' Wayback captures')
+    }
+    let detail = ''
+    if (captures.status === 'pending') { detail = ' · Checking recent captures…' }
+    if (captures.status === 'rejected') { detail = ' · Recent captures unavailable' }
+    if (captures.status === 'fulfilled' && !hasRows) { detail = ' · No recent captures found' }
+    status.textContent = availability + detail
+  }
 
-    status.textContent = captures.status !== 'fulfilled' ? availability + ' · Recent captures unavailable' :
-      !captures.value.length ? availability + ' · No recent captures found' : availability
-
-    for (const capture of captures.status === 'fulfilled' ? captures.value : []) {
+  function renderCaptures(captures) {
+    for (const capture of captures) {
       const url = 'https://web.archive.org/web/' + capture.timestamp + '/' + capture.original
       const row = document.createElement('li')
       const link = document.createElement('a')
@@ -198,20 +213,30 @@
       const key = JSON.stringify([url, countLimit])
       const saved = cache.get(key)
       if (saved && Date.now() - saved.at < ttl) {
-        render(saved.result)
+        renderStatus(saved.result)
+        renderCaptures(saved.result.captures.value)
         return
       }
-      const [count, captures] = await Promise.allSettled([
-        getWaybackSparkline(url, controller.signal),
-        getCaptures(url, countLimit, controller.signal)
+      const result = { count: { status: 'pending' }, captures: { status: 'pending' } }
+      async function load(key, request) {
+        try {
+          result[key] = { status: 'fulfilled', value: await request }
+        } catch (error) {
+          result[key] = { status: 'rejected' }
+        }
+        if (controller.signal.aborted || !panel.open) { return }
+        if (key === 'captures' && result[key].status === 'fulfilled') { renderCaptures(result[key].value) }
+        renderStatus(result)
+      }
+      await Promise.all([
+        load('count', getWaybackSparkline(url, controller.signal)),
+        load('captures', getCaptures(url, countLimit, controller.signal))
       ])
-      if (controller.signal.aborted) { return }
-      const result = { count, captures }
-      if (count.status === 'fulfilled' && captures.status === 'fulfilled') {
+      if (controller.signal.aborted || !panel.open) { return }
+      if (result.count.status === 'fulfilled' && result.captures.status === 'fulfilled') {
         if (cache.size >= 10) { cache.delete(cache.keys().next().value) }
         cache.set(key, { at: Date.now(), result })
       }
-      render(result)
     } catch (error) {
       if (!controller.signal.aborted) { status.textContent = 'Wayback lookup unavailable.' }
     }

@@ -47,6 +47,8 @@
         <input type="submit" tabindex="-1" class="search-submit">
       </form>
 
+      <p class="archive-help archive-target" id="archive-target"></p>
+
       <!-- Wayback Machine -->
 
       <div id="view-archived-container">
@@ -256,6 +258,10 @@
   <!-- Settings Page -->
 
   <div class="unselectable page" id="setting-page">
+    <header class="popup-heading">
+      <h1>Settings</h1>
+      <button type="button" id="open-settings-tab" class="archive-action">Open in tab</button>
+    </header>
 
     <div class="segmented-container">
       <ul class="nav setting-nav">
@@ -280,26 +286,33 @@
         <p class="archive-setting-wide archive-help">Search and save send the selected URL to the chosen mirror. Saves may become public.</p>
       </fieldset>
 
-      <label class="setting-switch" for="auto-archive-setting">
-        <input type="checkbox" class="saved-setting private-setting" id="auto-archive-setting">
-        <div class="setting-text-box">
+      <div class="setting-switch">
+        <label for="auto-archive-setting">
+          <input type="checkbox" class="saved-setting private-setting" id="auto-archive-setting">
           <span class="toggle">Auto Save Page</span>
-          <div style="margin-top: 0.5em">
-            <span>if not archived:</span><br>
-            <select id="auto-archive-age" class="btn-mini">
-              <option value="99999" selected>previously</option>
-              <option value="365">within past year</option>
-              <option value="90">within 90 days</option>
-              <option value="30">within 30 days</option>
-              <option value="7">within 7 days</option>
-              <option value="1">within 24 hours</option>
+        </label>
+        <div class="auto-archive-controls">
+          <label for="auto-archive-age">Save if no copy exists</label>
+          <select id="auto-archive-age">
+            <option value="99999" selected>at any time</option>
+            <option value="365">within the past year</option>
+            <option value="90">within 90 days</option>
+            <option value="30">within 30 days</option>
+            <option value="7">within 7 days</option>
+            <option value="1">within 24 hours</option>
+            <option value="custom">within a custom interval</option>
+          </select>
+          <div id="auto-archive-custom" hidden>
+            <input type="number" aria-label="Auto-save interval" id="auto-archive-value" min="1" max="365" step="1" value="1">
+            <select aria-label="Auto-save interval unit" id="auto-archive-unit">
+              <option value="days" selected>days</option>
+              <option value="hours">hours</option>
             </select>
           </div>
-          <div>
-            <button class="btn btn-mini" id="exclude-urls-btn">Exclude URLs...</button>
-          </div>
+          <p id="auto-archive-settings-status" class="archive-help" role="status"></p>
+          <button type="button" class="btn btn-mini" id="exclude-urls-btn">Exclude URLs…</button>
         </div>
-      </label>
+      </div>
       <label class="setting-switch" for="auto-bookmark-setting" id="auto-bookmark-label">
         <input type="checkbox" class="saved-setting" id="auto-bookmark-setting">
         <div class="setting-text-box">
