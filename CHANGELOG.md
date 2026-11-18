@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add versioned settings backup, merge, and replace.
+- Add opt-in local auto-save activity with export and clear controls.
+- Clean up orphaned tab records on background wake and retain the save error when a service status check fails.
+- Use the abortable request helper for sign-in, account info, annotations, and word cloud requests.
+
 - Add opt-in Archive.today and archive.is search and saving, including Save to both.
 - Widen the popup, separate provider results, and add a configurable recent-copy limit in Settings. Show Wayback results as they arrive.
 - Add full-tab settings through the add-on manager and an Open in tab button in the popup.

@@ -56,22 +56,13 @@ function doLogin(e) {
 }
 
 function doLoginAPI(email, password) {
-  let data = JSON.stringify({ email: email, password: password })
-  const loginPromise = new Promise((resolve, reject) => {
-    setTimeout(() => {
-      reject(new Error('timeout'))
-    }, 5000)
-    let headers = new Headers(hostHeaders)
-    headers.set('Content-Type', 'application/json')
-    fetch('https://archive.org/services/xauthn?op=login', {
-      method: 'POST',
-      body: data,
-      headers: headers
-    })
-    .then(resolve, reject)
-  })
-  loginPromise
-    .then(response => response.json())
+  const headers = new Headers(hostHeaders)
+  headers.set('Content-Type', 'application/json')
+  fetchWithTimeout('https://archive.org/services/xauthn?op=login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+    headers
+  }, undefined, 5000)
     .then((res) => {
       $('#login-btn').val('Login')
       if (res.success === false) {
@@ -86,9 +77,7 @@ function doLoginAPI(email, password) {
             $('#login-message').show().addClass('login-success').text('Success')
             loginSuccess()
             setTimeout(() => {
-              $('#login-page').hide()
-              $('#setting-page').hide()
-              $('#popup-page').show()
+              goBackToMain()
               $('#login-message').removeClass('login-success').hide()
             }, 500)
             $('#email-input').val('')

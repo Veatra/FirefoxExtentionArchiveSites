@@ -124,10 +124,15 @@ async function spnSystemStatus() {
         }
       }
     }
-    if (!request.signal.aborted && message) { $('#spn-system-status-msg').text(message) }
+    if (!request.signal.aborted && message) { appendSpnStatus(message) }
   } catch (error) {
-    if (!request.signal.aborted) { console.warn('Could not check Save Page Now status', error) }
+    if (!request.signal.aborted) { appendSpnStatus('Wayback service status is unavailable.') }
   }
+}
+
+function appendSpnStatus(message) {
+  const status = $('#spn-system-status-msg')
+  status.text([status.text(), message].filter(Boolean).join(' '))
 }
 
 function doSaveNow() {
@@ -866,6 +871,7 @@ function setupSaveListener() {
       return
     }
     if (message.message === 'save_success') {
+      spnStatusRequest?.abort()
       knownCaptureTimes.set(message.url, message.timestamp)
       $('#spn-system-status-msg').text('Wayback save complete.')
       $('#last-saved-msg').text('Last Saved ' + viewableTimestamp(message.timestamp)).show()
@@ -873,6 +879,7 @@ function setupSaveListener() {
       setupWaybackCount()
       enableAfterSaving()
     } else if (message.message === 'save_archived') {
+      spnStatusRequest?.abort()
       // snapshot already archived within timeframe
       $('#spn-system-status-msg').text(message.error || 'Wayback already saved this URL recently.')
       enableAfterSaving()

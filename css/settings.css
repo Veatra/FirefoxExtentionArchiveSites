@@ -163,3 +163,28 @@ body.standalone-settings {
 
 #auto-archive-value { width: 5rem; }
 #auto-archive-settings-status:empty { display: none; }
+
+.settings-tool {
+    border: 1px solid var(--archive-border);
+    border-radius: .4rem;
+    padding: .45rem .55rem;
+    margin: .6rem 0;
+}
+
+.settings-tool summary {
+    font-size: .85rem;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.settings-tool > label { display: block; margin-top: .35rem; }
+.settings-tool input, .settings-tool select { max-width: 100%; font-size: .8rem; }
+
+.archive-activity-list {
+    max-height: 11rem;
+    overflow: auto;
+    margin-bottom: .45rem;
+    padding-left: 1.2rem;
+    font-size: .8rem;
+    overflow-wrap: anywhere;
+}

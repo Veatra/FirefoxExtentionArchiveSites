@@ -16,3 +16,4 @@ Use a separate profile and a public test URL you own or have permission to archi
 | Login / logout | Use a test account, validate visible signed-in options, exercise extension logout and website logout. Legacy restoration remains an open item. |
 | Menus and view modes | Use page and link context menus and verify New Tab, Same Tab and New Window, including small screens and back-button behavior. |
 | Accessibility | Use Tab and Enter for Settings and Archives. Check focus, dark mode SPN text, reduced motion and readable status announcements. |
+| Local settings and activity | Export and merge a settings backup, verify current exclusions remain, then try Replace. Confirm that automatic saves are paused and account and consent settings remain intact. Enable the activity log, run an authorized auto-save, then export and clear the result. |

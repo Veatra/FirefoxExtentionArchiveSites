@@ -10,7 +10,7 @@ This repository contains an unpacked fork of the Internet Archive Wayback Machin
 
 The extension has no build step or runtime package dependencies. For an unsigned XPI on Firefox ESR, Mozilla documents setting `xpinstall.signatures.required` to `false` in `about:config`, then using **Install Add-on From File** in `about:addons`. This pref applies across the current Firefox profile. Use a dedicated ESR profile for the fork. The XPI must contain `manifest.json` at its root and omit the original `META-INF` signature files. The fork retains the explicit upstream ID, so installing it in the same profile may replace the upstream extension. See [Mozilla's signing guide](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/).
 
-Run `node --test tests/utils.test.js` with Node 20 or newer. If Mozilla's `web-ext` is installed, run `web-ext lint --ignore-files 'META-INF/**' 'tests/**'`. See [COMPAT.md](COMPAT.md) and [REGRESSION.md](REGRESSION.md) for tested behavior and remaining checks.
+Run `node --test tests/*.test.js` with Node 20 or newer. If Mozilla's `web-ext` is installed, run `web-ext lint --ignore-files 'META-INF/**' 'tests/**'`. See [COMPAT.md](COMPAT.md) and [REGRESSION.md](REGRESSION.md) for tested behavior and remaining checks.
 
 ## Find and save copies
 
@@ -24,3 +24,7 @@ Private Mode and exclusions block Archive.today actions. Archive.today is off by
 ## Settings
 
 Open Settings from the popup or the add-on manager. **Open in tab** makes more room for editing. Under **Auto Save Page**, the interval can be set to 1 hour through 365 days. Changing the interval leaves the Auto Save Page switch as it was. The **at any time** option saves only URLs without a known copy.
+
+Under **Settings → General**, **Settings backup** exports local JSON preferences and exclusions. Import can merge preferences and add exclusions, or replace backed-up preferences and exclusions. Import pauses automatic saves. Private Mode, the Archive.today opt-in, and account credentials stay with the current profile.
+
+**Auto-save activity** is off by default. Turn it on to see, export, or clear the last 50 automatic-save events. Each entry includes its site origin, time, and outcome. Page paths and query parameters stay out of the log.

@@ -47,6 +47,28 @@ function savePageNowChecked(atab, pageUrl, silent, options) {
   })
 }
 
+let autoSaveActivityWrites = Promise.resolve()
+
+function queueAutoSaveActivity(update) {
+  const pending = autoSaveActivityWrites.then(update)
+  autoSaveActivityWrites = pending.catch(error => console.warn('Auto-save activity update failed', error))
+  return pending
+}
+
+function recordAutoSaveActivity(silent, url, outcome) {
+  if (!silent || !isNotExcludedUrl(url)) { return }
+  const site = new URL(url).origin
+  queueAutoSaveActivity(async () => {
+    const settings = await chrome.storage.local.get([
+      'auto_save_activity_enabled', 'auto_save_activity', 'private_mode_setting'
+    ])
+    if (settings?.auto_save_activity_enabled !== true || settings.private_mode_setting !== false) { return }
+    const entries = Array.isArray(settings.auto_save_activity) ? settings.auto_save_activity : []
+    const entry = { site, outcome, at: new Date().toISOString() }
+    await chrome.storage.local.set({ auto_save_activity: [entry, ...entries].slice(0, 50) })
+  })
+}
+
 /**
  * Calls Save Page Now API.
  * If response OK, calls SPN Status API after a delay.
@@ -84,7 +106,9 @@ function savePageNow(atab, pageUrl, silent = false, options = {}, loggedInFlag =
       const jobId = loggedInFlag ? data?.job_id : extractJobIdFromHTML(data)
       // notifications depending on status
       if (jobId) {
-        if (errMsg.includes('same snapshot')) {
+        const recentlySaved = errMsg.includes('same snapshot')
+        recordAutoSaveActivity(silent, pageUrl, recentlySaved ? 'Already saved' : 'Accepted by Wayback')
+        if (recentlySaved) {
           // snapshot already archived within timeframe
           chrome.runtime.sendMessage({ message: 'save_archived', error: errMsg, url: pageUrl, atab }, checkLastError)
           if (!silent) { notifyMsg(errMsg) }
@@ -108,7 +132,7 @@ function savePageNow(atab, pageUrl, silent = false, options = {}, loggedInFlag =
             })
           }
         }
-        if (!errMsg.includes('same snapshot')) {
+        if (!recentlySaved) {
           const started = Date.now()
           savePageStatus({
             id: String(jobId), atab, pageUrl, silent, attempt: 0,
@@ -117,12 +141,14 @@ function savePageNow(atab, pageUrl, silent = false, options = {}, loggedInFlag =
         }
       } else {
         // missing jobId error
+        recordAutoSaveActivity(silent, pageUrl, 'Submission unconfirmed')
         chrome.runtime.sendMessage({ message: 'save_error', error: errMsg, url: pageUrl, atab }, checkLastError)
         if (!silent) { notifyMsg('Error: ' + errMsg) }
       }
     })
     .catch((err) => {
       // http error
+      recordAutoSaveActivity(silent, pageUrl, 'Submission unconfirmed')
       console.log(err)
       chrome.runtime.sendMessage({ message: 'save_error', error: 'Save Error', url: pageUrl, atab }, checkLastError)
     })
@@ -145,8 +171,11 @@ function extractJobIdFromHTML(html) {
  * @param silent {bool}: to pass to statusSuccess() or statusFailed().
  * @param jobId {string}: job_id returned by SPN response, passed to Status API.
  */
-async function resumeSaveJobs() {
+function resumeSaveJobs(reconcile = false) {
   chrome.storage.session.get(null).then(entries => {
+    if (reconcile) {
+      reconcileTabData(entries).catch(error => console.warn('Could not reconcile tab data', error))
+    }
     for (const [key, job] of Object.entries(entries)) {
       if (key.startsWith(spnJobPrefix) && job?.id && typeof job.nextCheckAt === 'number') {
         savePageStatus(job)
@@ -220,6 +249,7 @@ async function savePageStatus(job) {
  * @param data {Object}: Response data from Status API.
  */
 async function statusSuccess(atab, pageUrl, silent, data) {
+  recordAutoSaveActivity(silent, pageUrl, 'Saved')
 
   // update UI
   await removeToolbarState(atab, 'S')
@@ -261,6 +291,7 @@ async function statusSuccess(atab, pageUrl, silent, data) {
  * @param err {Error}: Error from a catch block. (optional)
  */
 async function statusFailed(atab, pageUrl, silent, data, err) {
+  recordAutoSaveActivity(silent, pageUrl, 'Capture unconfirmed')
 
   await removeToolbarState(atab, 'S')
   if (err) {
@@ -549,6 +580,13 @@ function checkSaveToMyWebArchive(url, timestamp) {
 //
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) { return }
+  if (message.message === 'clearAutoSaveActivity') {
+    if (sender.url !== chrome.runtime.getURL('index.html') &&
+        sender.url !== chrome.runtime.getURL('index.html?view=settings')) { return false }
+    queueAutoSaveActivity(() => chrome.storage.local.remove('auto_save_activity'))
+      .then(() => sendResponse({ cleared: true }), () => sendResponse({ cleared: false }))
+    return true
+  }
   if (message.message === 'saveurl') {
     // Save Page Now uses the public target even if the URL was extracted from an archive.
     const pageUrl = getCleanUrl(message.page_url)
@@ -852,11 +890,11 @@ function autoSaveAllowed(url, settings) {
     !isUrlInList(url, settings.auto_exclude_list || defaultAutoExcludeList)
 }
 
-async function autoSave(atab, url, beforeDate = new Date()) {
+async function autoSave(atab, url, beforeDate = new Date(), feature = 'auto_archive_setting') {
   if ((await getToolbarState(atab)).has('S')) { return }
-  const keys = ['private_mode_setting', 'auto_exclude_list']
+  const keys = ['private_mode_setting', 'auto_exclude_list', feature]
   chrome.storage.local.get(keys, (settings) => {
-    if (!autoSaveAllowed(url, settings)) { return }
+    if (!settings?.[feature] || !autoSaveAllowed(url, settings)) { return }
     getCachedWaybackCount(url, (values) => {
       const lastCapture = timestampToDate(values?.last_ts)
       const shouldSave = values?.total === 0 ||
@@ -865,7 +903,7 @@ async function autoSave(atab, url, beforeDate = new Date()) {
       checkAuthentication((auth) => {
         // Re-check at the last asynchronous boundary before publishing the URL.
         chrome.storage.local.get(keys, (current) => {
-          if (autoSaveAllowed(url, current)) {
+          if (current?.[feature] && autoSaveAllowed(url, current)) {
             savePageNow(atab, url, true, undefined, auth?.auth_check || false)
           }
         })
@@ -888,7 +926,7 @@ function autoBookmarksListener(id, bookmark) {
           // This forces only 1 URL to be saved. Also prevents importing URLs from saving any.
           // Trying to solve multiple URLs would require a queue. Could open a Bulk Save window?
           if (tabs?.[0] && (tabs[0].url === bookmark.url)) {
-            autoSave(tabs[0], bookmark.url)
+            autoSave(tabs[0], bookmark.url, undefined, 'auto_bookmark_setting')
           }
         })
       }
@@ -915,8 +953,8 @@ chrome.permissions.onAdded.addListener((permissions) => {
   }
 })
 
-// Restore work when the browser wakes a new event page in this session.
-resumeSaveJobs()
+// Restore work and clear orphaned records when a new event page wakes.
+resumeSaveJobs(true)
 
 // Called once on extension load, in case permission allowed on start.
 setupAutoSaveBookmarks()

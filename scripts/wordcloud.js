@@ -4,7 +4,7 @@
 /*   global Levenshtein */
 
 // from 'utils.js'
-/*   global getUrlByParameter, hostURL, hostHeaders */
+/*   global getUrlByParameter, hostURL, hostHeaders, isValidUrl, fetchWithTimeout */
 
 // from 'test/setup.js'
 /*   global isInTestEnv */
@@ -12,6 +12,7 @@
 function getTags() {
   let mynewTags = []
   const url = getUrlByParameter('url')
+  if (!isValidUrl(url)) { return }
   let hostname = new URL(url).hostname
   let toBeUsedAsURL = hostname.replace(/^www./, '')
   let y = hostname.split('.')
@@ -31,11 +32,7 @@ function getTags() {
   $('#loader_tagcloud').show()
   let headers = new Headers(hostHeaders)
   headers.set('backend', 'nomad')
-  fetch(new_url, {
-    method: 'GET',
-    headers: headers
-  })
-    .then(response => response.json())
+  fetchWithTimeout(new_url, { headers })
     .then((data) => {
       $('#loader_tagcloud').hide()
       if (!data.error && data.length > 0) {

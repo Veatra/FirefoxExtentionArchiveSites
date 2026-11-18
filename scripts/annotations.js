@@ -1,7 +1,7 @@
 // annotations.js
 
 // from 'utils.js'
-/*   global getUrlByParameter, openByWindowSetting, isValidUrl */
+/*   global getUrlByParameter, openByWindowSetting, isValidUrl, fetchWithTimeout */
 
 // from 'test/setup.js'
 /*   global isInTestEnv */
@@ -31,7 +31,10 @@ function getAnnotations(type = 'url') {
   if (!isValidUrl(url)) { return }
   $('.url').attr('href', url)
   const newUrl = hypothesisApiUrl(url, type)
-  $.getJSON(newUrl, (data) => {
+  return fetchWithTimeout(newUrl, { credentials: 'omit', headers: { Accept: 'application/json' } }, response => {
+    if (!response.ok) { throw new Error('Hypothesis HTTP ' + response.status) }
+    return response.json()
+  }).then(data => {
     const length = data.rows.length
     if (length > 0) {
       for (let i = 0; i < length; i++) {
@@ -98,12 +101,11 @@ function showAnnotations(type) {
   $('#' + type).show()
 }
 
-function get_hypothesis() {
-  let hypo_domain = getAnnotations('domain')
-  let hypo_url = getAnnotations('url')
+async function get_hypothesis() {
+  const results = await Promise.allSettled([getAnnotations('domain'), getAnnotations('url')])
   $('#loader_annotations').hide()
-  if (hypo_url && hypo_domain) {
-    $('#annotations_status').show()
+  if (results.some(result => result.status === 'rejected')) {
+    $('#annotations_status').text('Some annotations could not be loaded.').show()
   }
 }
 

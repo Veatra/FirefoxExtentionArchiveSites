@@ -352,6 +352,30 @@
         <input class="saved-setting" type="radio" name="view-setting-input" id="view-setting-window" value="window">
         <label class="toggle" for="view-setting-window">New Window</label><br>
       </div>
+      <details class="settings-tool" id="auto-save-activity">
+        <summary>Auto-save activity</summary>
+        <label><input type="checkbox" id="auto-save-activity-enabled"> Keep a local record</label>
+        <p class="archive-help">Records the site and result of up to 50 automatic save events. Page paths and query strings are omitted.</p>
+        <p id="auto-save-activity-status" class="archive-help" role="status"></p>
+        <ul id="auto-save-activity-list" class="archive-activity-list"></ul>
+        <button type="button" class="archive-action" id="auto-save-activity-export" disabled>Export activity</button>
+        <button type="button" class="archive-action" id="auto-save-activity-clear" disabled>Clear activity</button>
+      </details>
+      <details class="settings-tool">
+        <summary>Settings backup</summary>
+        <p class="archive-help">Backups include preferences and exclusions. Importing pauses automatic saves and leaves Private Mode and Archive.today opt-in as they are.</p>
+        <button type="button" id="settings-backup-export" class="archive-action">Export settings</button>
+        <label for="settings-backup-file">Backup file</label>
+        <input type="file" id="settings-backup-file" accept=".json,application/json">
+        <label for="settings-backup-mode">Apply backup</label>
+        <select id="settings-backup-mode">
+          <option value="merge">Merge settings and exclusions</option>
+          <option value="replace">Replace backed-up preferences</option>
+        </select>
+        <button type="button" id="settings-backup-import" class="archive-action">Import settings</button>
+        <p id="settings-backup-status" role="status" class="archive-help"></p>
+      </details>
+
     </div>
 
     <div id="second-panel">
@@ -458,6 +482,8 @@
   <script src="scripts/popup.js"></script>
   <script src="scripts/archives-panel.js"></script>
   <script src="scripts/settings.js"></script>
+  <script src="scripts/settings-transfer.js"></script>
+  <script src="scripts/auto-save-activity.js"></script>
   <script src="scripts/login.js"></script>
 </body>
 

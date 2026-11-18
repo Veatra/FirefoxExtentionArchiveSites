@@ -126,20 +126,9 @@ if (typeof isInTestEnv === 'undefined') {
  * @return {Promise}
  */
 function getUserInfo() {
-  const apiPromise = new Promise((resolve, reject) => {
-    setTimeout(() => {
-      reject(new Error('timeout'))
-    }, 5000)
-    let headers = new Headers(hostHeaders)
-    headers.set('Content-Type', 'application/json')
-    fetch('https://archive.org/services/user.php?op=whoami', {
-      method: 'GET',
-      headers: headers
-    })
-    .then(resolve, reject)
-  })
-  return apiPromise
-  .then(response => response.json())
+  const headers = new Headers(hostHeaders)
+  headers.set('Content-Type', 'application/json')
+  return fetchWithTimeout('https://archive.org/services/user.php?op=whoami', { headers }, undefined, 5000)
   .then((res) => {
     if (res?.success && ('value' in res)) {
       // success
@@ -215,13 +204,28 @@ function queueTabData(tab, run) {
   })
 }
 
+function getLiveTab(id) {
+  return new Promise(resolve => {
+    chrome.tabs.get(id, tab => resolve(chrome.runtime.lastError ? null : tab))
+  })
+}
+
+async function reconcileTabData(entries) {
+  const live = new Set((await chrome.tabs.query({})).map(tab => 'tab_' + getTabKey(tab)))
+  for (const key of Object.keys(entries)) {
+    const match = /^tab_(\d+)i(\d+)$/.exec(key)
+    if (!match || live.has(key)) { continue }
+    const tab = { windowId: Number(match[1]), id: Number(match[2]) }
+    await queueTabData(tab, async currentKey => {
+      const current = await getLiveTab(tab.id)
+      if (current?.windowId !== tab.windowId) { await chrome.storage.session.remove(currentKey) }
+    })
+  }
+}
+
 function mutateTabData(tab, change, afterChange) {
   return queueTabData(tab, async key => {
-    const liveTab = await new Promise(resolve => {
-      chrome.tabs.get(tab.id, result => {
-        resolve(chrome.runtime.lastError ? null : result)
-      })
-    })
+    const liveTab = await getLiveTab(tab.id)
     if (!liveTab || liveTab.windowId !== tab.windowId ||
       (tab.url && liveTab.url && tab.url !== liveTab.url)) { return }
     const data = (await chrome.storage.session.get(key))[key] || {}
@@ -359,6 +363,7 @@ function wmAvailabilityCheck(url, onsuccess, onfail) {
   .catch((err) => {
     // catch the error in case of api failure
     console.log('wmAvailabilityCheck ERROR: ', err)
+    if (onfail) { onfail(err) }
   })
 }
 
