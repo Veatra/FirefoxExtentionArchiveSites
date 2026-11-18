@@ -1,7 +1,7 @@
 // exclude-list.js
 
 // from 'utils.js'
-/*   global defaultAutoExcludeList, isNotExcludedUrl, cropPrefix */
+/*   global defaultAutoExcludeList, normalizeExcludePattern */
 
 // Removes focus outline on mouse click, while keeping during keyboard use.
 function clearFocus() {
@@ -34,16 +34,7 @@ function loadExcludeList() {
 function saveExcludeListAndClose() {
   const text = document.getElementById('exclude-list-area').value
   const lines = text.split('\n')
-  let urlSet = new Set()
-  // crop schemes from every URL and skip duplicates
-  for (let line of lines) {
-    if (isNotExcludedUrl(line)) {
-      const curl = cropPrefix(line)
-      if (curl) { urlSet.add(curl) }
-    }
-  }
-  // save the modified list
-  const exlist = Array.from(urlSet)
+  const exlist = Array.from(new Set(lines.map(normalizeExcludePattern).filter(Boolean)))
   chrome.storage.local.set({ 'auto_exclude_list': exlist }, () => {
     closeWindow()
   })

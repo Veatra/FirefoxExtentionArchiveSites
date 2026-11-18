@@ -84,6 +84,7 @@ body {
 #wayback-count-msg,
 #url-not-supported-msg,
 #using-search-msg,
+#spn-system-status-msg,
 #last-saved-msg {
     font-size: 9pt;
     color: #222;
@@ -524,6 +525,7 @@ body {
     #wayback-count-msg,
     #url-not-supported-msg,
     #using-search-msg,
+    #spn-system-status-msg,
     #last-saved-msg {
         color: #eee;
     }
@@ -545,4 +547,52 @@ body {
         background-color: #666;
     }
 
+}
+
+#archives-panel {
+    margin: 0.5rem 0;
+    text-align: left;
+    font-size: 0.8rem;
+}
+
+#archives-panel summary {
+    cursor: pointer;
+    font-weight: bold;
+}
+
+#archive-capture-status {
+    margin: 0.25rem 0;
+}
+
+#archive-capture-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 12rem;
+    overflow: auto;
+}
+
+#archive-capture-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.25rem;
+    margin: 0.25rem 0;
+}
+
+#archives-panel a {
+    color: inherit;
+}
+
+#archives-panel :focus-visible,
+.tab-item:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spn-flip *, .progress-bar, .tooltip {
+        animation: none !important;
+        transition: none !important;
+    }
 }

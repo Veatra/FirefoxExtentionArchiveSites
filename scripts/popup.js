@@ -3,12 +3,13 @@
 // from 'utils.js'
 /*   global isArchiveUrl, isValidUrl, makeValidURL, isNotExcludedUrl, getCleanUrl, openByWindowSetting, hostURL */
 /*   global feedbackURL, newshosts, dateToTimestamp, timestampToDate, viewableTimestamp, fixedEncodeURIComponent */
-/*   global attachTooltip, checkLastError, cropPrefix, cropScheme, hostHeaders, getUserInfo, checkAuthentication */
+/*   global attachTooltip, checkLastError, cropPrefix, cropScheme, hostHeaders, fetchWithTimeout, getUserInfo, checkAuthentication */
 
 let searchBoxTimer
 
 // don't reference in setup functions as there's a delay in assignment
 let activeURL, activeTab
+const knownCaptureTimes = new Map()
 
 const ERROR_CODE_DIC = {
   400: 'Bad Request',
@@ -52,9 +53,8 @@ function showSettingsTabTip() {
   let tt = $('<div>').append($('<p>').text('There are more great features in Settings!').attr({ 'class': 'setting-tip' }))[0].outerHTML
   let tabItem = $('#settings-tab-btn')
   setTimeout(() => {
-    tabItem.append(attachTooltip(tabItem, tt, 'top'))
-    .tooltip('show')
-    .on('mouseenter', () => {
+    attachTooltip(tabItem, tt, 'top').tooltip('show')
+    .one('mouseenter focus', () => {
       $(tabItem).tooltip('hide')
       // prevent tooltip from ever showing again once mouse entered
       chrome.storage.local.set({ show_settings_tab_tip: false }, () => { })
@@ -86,44 +86,45 @@ function setupSettingsTabTip() {
  * First check SPN system status for general issues. Then check user status
  * (if authenticated) and display a notification.
  */
-function spnSystemStatus() {
-  $.getJSON(hostURL + 'save/status/system', (data) => {
-    let msg = ''
-    if (data?.recent_captures < 100 || data?.status !== 'ok') {
-      msg = 'Save Page Now has issues right now, please try again later.'
-    } else if (data?.recent_captures > 3000) {
-      msg = 'Save Page Now is overloaded right now, please try again later.'
+let spnStatusRequest
+
+async function spnSystemStatus() {
+  spnStatusRequest?.abort()
+  const request = new AbortController()
+  spnStatusRequest = request
+  const options = { credentials: 'include', signal: request.signal }
+  const read = response => {
+    if (!response.ok) { throw new Error('SPN status HTTP ' + response.status) }
+    return response.json()
+  }
+
+  try {
+    const system = await fetchWithTimeout(hostURL + 'save/status/system', options, read)
+    let message
+    if (system?.recent_captures < 100 || system?.status !== 'ok') {
+      message = 'Save Page Now has issues right now, please try again later.'
+    } else if (system.recent_captures > 3000 || Object.values(system.queues || {}).some(count => count > 0)) {
+      message = 'Save Page Now is overloaded right now, please try again later.'
     } else {
-      if (data?.queues) {
-        const sum = Object.values(data.queues).reduce((a, b) => a + b, 0)
-        if (sum > 0) {
-          msg = 'Save Page Now is overloaded right now, please try again later.'
+      const auth = await new Promise(resolve => checkAuthentication(resolve))
+      if (auth?.auth_check && !request.signal.aborted) {
+        const user = await fetchWithTimeout(hostURL + 'save/status/user', options, read)
+        if (user.available - user.processing <= 1) {
+          message = 'You have done too many captures, please wait a few minutes and retry.'
+        } else if (user.daily_captures >= user.daily_captures_limit) {
+          message = 'You have done too many captures today, please try again tomorrow.'
         }
       }
     }
-    if (msg !== '') {
-      $('#spn-system-status-msg').text(msg)
-    } else {
-      checkAuthentication((result) => {
-        checkLastError()
-        if (result && result.auth_check) {
-          $.getJSON(hostURL + 'save/status/user', (data) => {
-            if (data?.available - data?.processing <= 1) {
-              msg = 'You have done too many captures, please wait a few minutes and retry.'
-            } else if (data?.daily_captures >= data?.daily_captures_limit) {
-              msg = 'You have done too many captures today, please try again tomorrow.'
-            }
-            if (msg !== '') {
-              $('#spn-system-status-msg').text(msg)
-            }
-          })
-        }
-      })
-    }
-  })
+    if (!request.signal.aborted && message) { $('#spn-system-status-msg').text(message) }
+  } catch (error) {
+    if (!request.signal.aborted) { console.warn('Could not check Save Page Now status', error) }
+  }
 }
 
 function doSaveNow() {
+  spnStatusRequest?.abort()
+  $('#spn-system-status-msg').empty()
   const url = activeURL
   if (url && isValidUrl(url) && isNotExcludedUrl(url) && !isArchiveUrl(url)) {
     let options = { 'capture_all': 1 }
@@ -185,6 +186,7 @@ function setupSaveAction(url) {
       checkLastError()
       if (message) {
         if (message?.last_ts) {
+          knownCaptureTimes.set(url, message.last_ts)
           $('#last-saved-msg').text('Last Saved ' + viewableTimestamp(message.last_ts)).show()
         } else if (message?.total === -1) {
           $('#last-saved-msg').text('URL excluded from viewing').show()
@@ -291,8 +293,10 @@ function social_share(eventObj) {
   // Share wayback link to the most recent snapshot of URL at the time this is called.
   let clean_url = getCleanUrl(activeURL)
   if (isValidUrl(clean_url)) {
-    let timestamp = dateToTimestamp(new Date())
-    let sharing_url = 'https://web.archive.org/web/' + timestamp + '/' + clean_url
+    const timestamp = knownCaptureTimes.get(clean_url)
+    const date = /^\d{14}$/.test(timestamp) && timestampToDate(timestamp)
+    const capture = date && dateToTimestamp(date) === timestamp ? timestamp : '2'
+    const sharing_url = 'https://web.archive.org/web/' + capture + '/' + clean_url
 
     // Latest Social Share URLs: https://github.com/bradvin/social-share-urls
     if (id.includes('facebook-share-btn')) {
@@ -333,6 +337,7 @@ function searchTweet() {
 
 // Update the UI when user is using the Search Box.
 function useSearchURL(flag) {
+  document.getElementById('archives-panel').open = false
   if (flag) {
     showUrlNotSupported(false)
     $('#last-saved-msg').hide()
@@ -421,8 +426,8 @@ function display_list(key_word) {
       for (let i = 0; i < data.hosts.length; i++) {
         $('#suggestion-box').append(
           $('<div>').attr('role', 'button').text(data.hosts[i].display_name).click((event) => {
-            document.getElementById('search-input').value = event.target.innerHTML
-            activeURL = getCleanUrl(makeValidURL(event.target.innerHTML))
+            document.getElementById('search-input').value = event.currentTarget.textContent
+            activeURL = getCleanUrl(makeValidURL(event.currentTarget.textContent))
             if (activeURL) { useSearchURL(true) }
           })
         )
@@ -738,12 +743,12 @@ function clearFocus() {
 
 // Displays and updates or clears the Wayback Count badge.
 function setupWaybackCount() {
-  chrome.storage.local.get(['wm_count_setting'], (settings) => {
+  chrome.storage.local.get(['private_mode_setting', 'wm_count_setting'], (settings) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs?.[0]) {
         // not using activeURL as we don't want wayback count on search url
         const url = tabs[0].url
-        if (url && settings?.wm_count_setting && isValidUrl(url) && isNotExcludedUrl(url) && !isArchiveUrl(url)) {
+        if (url && settings?.private_mode_setting === false && settings.wm_count_setting && isValidUrl(url) && isNotExcludedUrl(url) && !isArchiveUrl(url)) {
           showWaybackCount(url)
           chrome.runtime.sendMessage({ message: 'updateCountBadge' })
         } else {
@@ -840,6 +845,7 @@ function setupSaveListener() {
       return
     }
     if (message.message === 'save_success') {
+      knownCaptureTimes.set(message.url, message.timestamp)
       $('#save-progress-bar').hide()
       $('#spn-front-label').text('Save successful')
       $('#last-saved-msg').text('Last Saved ' + viewableTimestamp(message.timestamp)).show()
@@ -857,6 +863,7 @@ function setupSaveListener() {
       $('#save-progress-bar').hide()
       $('#spn-front-label').text('Processing')
       $('#spn-btn').attr('title', message.error)
+      $('#spn-system-status-msg').text(message.error)
       enableAfterSaving()
       spnSystemStatus()
     } else if (message.message === 'save_start') {
@@ -865,6 +872,7 @@ function setupSaveListener() {
       $('#save-progress-bar').hide()
       $('#spn-front-label').text('Save Failed')
       $('#spn-btn').attr('title', message.error)
+      $('#spn-system-status-msg').text(message.error)
       enableAfterSaving()
       spnSystemStatus()
     } else if ((message.message === 'resource_list_show')) {

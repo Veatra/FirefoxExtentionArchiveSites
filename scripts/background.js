@@ -8,9 +8,9 @@ if (typeof importScripts === 'function') {
 }
 
 // from 'utils.js'
-/*   global isNotExcludedUrl, getCleanUrl, isArchiveUrl, isValidUrl, notifyMsg, openByWindowSetting, sleep, wmAvailabilityCheck, hostURL */
+/*   global isNotExcludedUrl, getCleanUrl, isArchiveUrl, isValidUrl, notifyMsg, openByWindowSetting, sleep, wmAvailabilityCheck, hostURL, fetchWithTimeout */
 /*   global initDefaultOptions, badgeCountText, getWaybackCount, newshosts, dateToTimestamp, fixedEncodeURIComponent, checkLastError */
-/*   global hostHeaders, timestampToDate, isBadgeOnTop, isUrlInList, saveTabData, clearTabData, readTabData, initAutoExcludeList */
+/*   global hostHeaders, timestampToDate, isBadgeOnTop, isUrlInList, defaultAutoExcludeList, saveTabData, clearTabData, mutateTabData, readTabData, initAutoExcludeList */
 /*   global isDevVersion, checkAuthentication, setupContextMenus, cropPrefix, alertMsg */
 
 let globalAPICache = new Map()
@@ -19,6 +19,8 @@ const API_LOADING = 'LOADING'
 const API_TIMEOUT = 10000
 const API_RETRY = 1000
 const SPN_RETRY = 6000
+const spnJobPrefix = 'spn_job_'
+const activeSpnJobs = new Set()
 let tabIdPromise
 
 // not required because in manifest v3, we use different subdomain of hostURLs for different browsers
@@ -70,24 +72,16 @@ function savePageNow(atab, pageUrl, silent = false, options = {}, loggedInFlag =
   if (!loggedInFlag) {
     headers.set('Accept', 'text/html,application/xhtml+xml,application/xml') // required when logged-out
   } // else Accept: application/json
-  const timeoutPromise = new Promise((resolve, reject) => {
-    setTimeout(() => { reject(new Error('timeout')) }, API_TIMEOUT)
-    fetch(hostURL + 'save/' + queryParams, {
-      credentials: 'include',
-      method: 'POST',
-      body: postData,
-      headers
-    })
-    .then(resolve, reject)
-  })
-
-  // call api
-  timeoutPromise
-    .then(response => (loggedInFlag ? response.json() : response.text()))
+  fetchWithTimeout(hostURL + 'save/' + queryParams, {
+    credentials: 'include',
+    method: 'POST',
+    body: postData,
+    headers
+  }, response => loggedInFlag ? response.json() : response.text(), API_TIMEOUT)
     .then(async (data) => {
       // get response info
       const errMsg = (loggedInFlag && data?.message) || 'Please Try Again'
-      const jobId = loggedInFlag ? data.job_id : extractJobIdFromHTML(data)
+      const jobId = loggedInFlag ? data?.job_id : extractJobIdFromHTML(data)
       // notifications depending on status
       if (jobId) {
         if (errMsg.includes('same snapshot')) {
@@ -96,7 +90,7 @@ function savePageNow(atab, pageUrl, silent = false, options = {}, loggedInFlag =
           if (!silent) { notifyMsg(errMsg) }
         }
         else if (errMsg.includes('capture will start')) {
-          chrome.runtime.sendMessage({ message: 'slow_archive_msg', error: 'Processing', url: pageUrl, atab }, checkLastError)
+          chrome.runtime.sendMessage({ message: 'slow_archive_msg', error: errMsg, url: pageUrl, atab }, checkLastError)
           if (!silent) { notifyMsg(errMsg) }
         } else {
           // update UI
@@ -113,9 +107,13 @@ function savePageNow(atab, pageUrl, silent = false, options = {}, loggedInFlag =
               }
             })
           }
-          // call status after SPN response
-          await sleep(SPN_RETRY)
-          savePageStatus(atab, pageUrl, silent, jobId)
+        }
+        if (!errMsg.includes('same snapshot')) {
+          const started = Date.now()
+          savePageStatus({
+            id: String(jobId), atab, pageUrl, silent, attempt: 0,
+            nextCheckAt: started + SPN_RETRY, deadline: started + 5 * 60 * 1000
+          })
         }
       } else {
         // missing jobId error
@@ -147,46 +145,71 @@ function extractJobIdFromHTML(html) {
  * @param silent {bool}: to pass to statusSuccess() or statusFailed().
  * @param jobId {string}: job_id returned by SPN response, passed to Status API.
  */
-function savePageStatus(atab, pageUrl, silent = false, jobId) {
-
-  // setup api
-  // Accept header required when logged-out, even though response is in JSON.
-  let headers = new Headers(hostHeaders)
-  headers.set('Accept', 'text/html,application/xhtml+xml,application/xml')
-
-  const timeoutPromise = new Promise((resolve, reject) => {
-    setTimeout(() => { reject(new Error('timeout')) }, API_TIMEOUT)
-    fetch(hostURL + 'save/status/' + jobId, {
-      credentials: 'include',
-      method: 'GET',
-      headers
-    })
-    .then(resolve, reject)
-  })
-  // call api
-  let retryAfter = SPN_RETRY
-  timeoutPromise
-    .then((response) => {
-      // reassign retryAfter from header value
-      const retryValue = parseInt(response.headers.get('Retry-After'), 10)
-      if (!Number.isNaN(retryValue)) { retryAfter = retryValue * 1000 }
-      return response.json()
-    })
-    .then(async (json) => {
-      const status = json.status || 'error'
-      chrome.runtime.sendMessage({ message: 'resource_list_show', data: json, url: pageUrl }, checkLastError)
-      if (status === 'success') {
-        statusSuccess(atab, pageUrl, silent, json)
-      } else if (status === 'pending') {
-        await sleep(retryAfter)
-        savePageStatus(atab, pageUrl, silent, jobId)
-      } else {
-        statusFailed(atab, pageUrl, silent, json)
+async function resumeSaveJobs() {
+  chrome.storage.session.get(null).then(entries => {
+    for (const [key, job] of Object.entries(entries)) {
+      if (key.startsWith(spnJobPrefix) && job?.id && typeof job.nextCheckAt === 'number') {
+        savePageStatus(job)
       }
-    })
-    .catch((err) => {
-      statusFailed(atab, pageUrl, silent, null, err)
-    })
+    }
+  }).catch(error => console.warn('Could not resume Wayback jobs', error))
+}
+
+async function savePageStatus(job) {
+  const { id, atab, pageUrl, silent, deadline } = job
+  if (activeSpnJobs.has(id)) { return }
+  activeSpnJobs.add(id)
+  const key = spnJobPrefix + id
+  const headers = new Headers(hostHeaders)
+  headers.set('Accept', 'text/html,application/xhtml+xml,application/xml')
+  try {
+    while (job.attempt < 30 && job.nextCheckAt < deadline && Date.now() < deadline) {
+      await chrome.storage.session.set({ [key]: job }).catch(error => console.warn('Could not retain Wayback job', error))
+      await sleep(Math.max(0, job.nextCheckAt - Date.now()))
+      if (Date.now() >= deadline) { break }
+      if (silent) {
+        const settings = await chrome.storage.local.get(['private_mode_setting'])
+        if (settings.private_mode_setting !== false) {
+          await statusFailed(atab, pageUrl, silent, { message: 'Capture status checks stopped because Private Mode is on' })
+          return
+        }
+      }
+      job.attempt++
+      let delay = SPN_RETRY
+      let result
+      try {
+        result = await fetchWithTimeout(hostURL + 'save/status/' + encodeURIComponent(id), {
+          credentials: 'include',
+          headers
+        }, async response => {
+          const retry = response.headers.get('Retry-After')
+          if (retry) {
+            const milliseconds = /^\d+$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - Date.now()
+            if (Number.isFinite(milliseconds)) { delay = Math.max(SPN_RETRY, Math.min(milliseconds, 60000)) }
+          }
+          if (response.status === 429 || response.status >= 500) {
+            await response.body?.cancel()
+            return null
+          }
+          return response.json()
+        }, API_TIMEOUT)
+      } catch (error) {
+        console.warn('SPN status request failed', error)
+      }
+      job.nextCheckAt = Date.now() + delay
+      if (result) {
+        chrome.runtime.sendMessage({ message: 'resource_list_show', data: result, url: pageUrl }, checkLastError)
+        if (result.status === 'success') { return await statusSuccess(atab, pageUrl, silent, result) }
+        if (result.status !== 'pending') { return await statusFailed(atab, pageUrl, silent, result) }
+      }
+    }
+    await statusFailed(atab, pageUrl, silent, { message: 'Capture status timed out. Check Wayback before submitting again.' })
+  } catch (error) {
+    await statusFailed(atab, pageUrl, silent, null, error)
+  } finally {
+    await chrome.storage.session.remove(key).catch(error => console.warn('Could not clear completed Wayback job', error))
+    activeSpnJobs.delete(id)
+  }
 }
 
 /**
@@ -201,7 +224,7 @@ async function statusSuccess(atab, pageUrl, silent, data) {
   // update UI
   await removeToolbarState(atab, 'S')
   await addToolbarState(atab, 'check')
-  incrementCount(data.original_url)
+  incrementCount(data.original_url, data.timestamp)
   updateWaybackCountBadge(atab, data.original_url)
   chrome.runtime.sendMessage({
     message: 'save_success',
@@ -247,24 +270,14 @@ async function statusFailed(atab, pageUrl, silent, data, err) {
       data: err
     }, checkLastError)
   }
-  if (data?.message) {
-    chrome.runtime.sendMessage({
-      message: 'save_error',
-      error: data.message,
-      url: pageUrl,
-      atab
-    }, checkLastError)
-    // notify
-    if (!silent) {
-      notifyMsg('Error: ' + data.message, (notificationId) => {
-        chrome?.notifications?.onClicked.addListener((newNotificationId) => {
-          if (notificationId === newNotificationId) {
-            openByWindowSetting('https://archive.org/account/login')
-          }
-        })
-      })
-    }
-  }
+  const message = data?.message || 'Could not confirm capture status'
+  chrome.runtime.sendMessage({
+    message: 'save_error',
+    error: message,
+    url: pageUrl,
+    atab
+  }, checkLastError)
+  if (!silent) { notifyMsg('Error: ' + message) }
 }
 
 /**
@@ -277,18 +290,13 @@ async function statusFailed(atab, pageUrl, silent, data, err) {
 function saveToMyWebArchive(url, timestamp) {
 
   const postData = { url, 'snapshot': timestamp, 'tags': [] }
-  const timeoutPromise = new Promise((resolve, reject) => {
-    setTimeout(() => { reject(new Error('timeout')) }, API_TIMEOUT)
-    let headers = new Headers(hostHeaders)
-    headers.set('Content-Type', 'application/json')
-    fetch(hostURL + '__wb/web-archive', {
-      method: 'POST',
-      body: JSON.stringify(postData),
-      headers
-    })
-    .then(resolve, reject)
-  })
-  return timeoutPromise
+  const headers = new Headers(hostHeaders)
+  headers.set('Content-Type', 'application/json')
+  return fetchWithTimeout(hostURL + '__wb/web-archive', {
+    method: 'POST',
+    body: JSON.stringify(postData),
+    headers
+  }, undefined, API_TIMEOUT)
 }
 
 /**
@@ -301,20 +309,14 @@ function saveToMyWebArchive(url, timestamp) {
  */
 function fetchAPI(url, onSuccess, onFail, postData = null) {
 
-  const timeoutPromise = new Promise((resolve, reject) => {
-    setTimeout(() => { reject(new Error('timeout')) }, API_TIMEOUT)
-    let headers = new Headers(hostHeaders)
-    headers.set('backend', 'nomad')
-    headers.set('Content-Type', 'application/json')
-    fetch(url, {
-      method: (postData) ? 'POST' : 'GET',
-      body: (postData) ? JSON.stringify(postData) : null,
-      headers
-    })
-    .then(resolve, reject)
-  })
-  return timeoutPromise
-    .then(response => response.json())
+  const headers = new Headers(hostHeaders)
+  headers.set('backend', 'nomad')
+  headers.set('Content-Type', 'application/json')
+  return fetchWithTimeout(url, {
+    method: postData ? 'POST' : 'GET',
+    body: postData ? JSON.stringify(postData) : null,
+    headers
+  }, undefined, API_TIMEOUT)
     .then(data => {
       if (data) {
         onSuccess(data)
@@ -437,13 +439,11 @@ chrome.action.onClicked.addListener((tab) => {
 //   ['blocking', 'requestHeaders'] // FIXME: not supported in Safari
 // )
 
-// chrome.webRequest.onErrorOccurred is not supported in manifest v3.
-
 // Checks for error in page loading such as when a domain doesn't exist.
 //
 chrome.webRequest.onErrorOccurred.addListener((details) => {
-  if ((['net::ERR_ABORTED', 'net::ERR_NAME_NOT_RESOLVED', 'net::ERR_NAME_RESOLUTION_FAILED',
-    'net::ERR_CONNECTION_TIMED_OUT', 'net::ERR_NAME_NOT_RESOLVED', 'NS_ERROR_UNKNOWN_HOST'].indexOf(details.error) >= 0) && (details.tabId >= 0) && (details.parentFrameId < 1)) {
+  if ((['net::ERR_NAME_NOT_RESOLVED', 'net::ERR_NAME_RESOLUTION_FAILED',
+    'net::ERR_CONNECTION_TIMED_OUT', 'NS_ERROR_UNKNOWN_HOST'].indexOf(details.error) >= 0) && (details.tabId >= 0) && (details.parentFrameId < 1)) {
     // note: testing parentFrameId prevents false positives
     const url = details.url
     if (isNotExcludedUrl(url) && isValidUrl(url)) {
@@ -516,8 +516,8 @@ function checkNotFound(details) {
     })
   }
 
-  chrome.storage.local.get(['agreement', 'not_found_setting', 'embed_popup_setting'], (settings) => {
-    if (settings?.agreement && settings.not_found_setting && isNotExcludedUrl(details.url) && details?.statusCode >= 400) {
+  chrome.storage.local.get(['agreement', 'private_mode_setting', 'not_found_setting', 'embed_popup_setting'], (settings) => {
+    if (settings?.agreement && settings.private_mode_setting === false && settings.not_found_setting && isNotExcludedUrl(details.url) && details?.statusCode >= 400) {
       const bannerFlag = (settings.embed_popup_setting && (details.statusCode !== 999)) || false
       chrome.tabs.get(details.tabId, (tab) => {
         checkWM(tab, details, bannerFlag)
@@ -532,7 +532,6 @@ function checkSaveToMyWebArchive(url, timestamp) {
   chrome.storage.local.get(['my_archive_setting'], (settings) => {
     if (settings?.my_archive_setting) {
       saveToMyWebArchive(url, timestamp)
-      .then(response => response.json())
       .then(data => {
         if (!data?.success) {
           console.log('Save to My Web Archive FAILED: ', data.error)
@@ -567,11 +566,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   } else if (message.message === 'getWikipediaBooks') {
     // retrieve wikipedia books
-    getCachedBooks(message.query,
-      (json) => { sendResponse(json) },
-      (error) => { sendResponse({ error }) },
-      message.isbns
-    )
+    chrome.storage.local.get(['private_mode_setting'], (settings) => {
+      if (settings?.private_mode_setting !== false || !isNotExcludedUrl(message.query)) {
+        sendResponse({ status: 'error', error: 'Automatic lookup disabled' })
+        return
+      }
+      getCachedBooks(message.query,
+        (json) => { sendResponse(json) },
+        (error) => { sendResponse({ error }) },
+        message.isbns
+      )
+    })
     return true
   } else if (message.message === 'getCitedPapers') {
     // retrieve wikipedia papers
@@ -602,6 +607,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       openByWindowSetting(context_url, null, resolve)
     })
   } else if (message.message === 'getToolbarState') {
+    resumeSaveJobs()
     // retrieve the toolbar state set & custom tab data
     (async () => {
       let data = await readTabData(message.atab);
@@ -661,10 +667,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
   } else if (message.message === 'getCachedWaybackCount') {
     // retrieve wayback count
-    getCachedWaybackCount(message.url,
-      (values) => { sendResponse(values) },
-      (error) => { sendResponse({ error }) }
-    )
+    chrome.storage.local.get(['private_mode_setting'], (settings) => {
+      if (settings?.private_mode_setting !== false) {
+        sendResponse({ error: 'Automatic lookup disabled' })
+        return
+      }
+      getCachedWaybackCount(message.url,
+        (values) => { sendResponse(values) },
+        (error) => { sendResponse({ error }) }
+      )
+    })
     return true
   } else if (message.message === 'clearCountCache') {
     clearCountCache()
@@ -680,14 +692,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false
 })
 
+chrome.tabs.onRemoved.addListener((id, info) => {
+  clearTabData({ id, windowId: info.windowId })
+})
+
+chrome.tabs.onDetached.addListener((id, info) => {
+  clearTabData({ id, windowId: info.oldWindowId })
+})
+
 chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
+  if (info.status === 'loading') {
+    await clearToolbarState(tab)
+  }
   const url = tab.url
   if (!(isNotExcludedUrl(url) && isValidUrl(url)) || isArchiveUrl(url)) { return }
 
   if (info.status === 'complete') {
     updateWaybackCountBadge(tab, url)
 
-    chrome.storage.local.get(['not_found_setting', 'auto_archive_setting', 'auto_archive_age', 'fact_check_setting', 'wiki_setting'], async (settings) => {
+    chrome.storage.local.get(['private_mode_setting', 'not_found_setting', 'auto_archive_setting', 'auto_archive_age', 'fact_check_setting', 'wiki_setting'], async (settings) => {
+      if (settings?.private_mode_setting !== false) { return }
       // auto save page
       if (settings?.auto_archive_setting) {
         let beforeDate = null
@@ -735,13 +759,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
     })
   } else if (info.status === 'loading') {
     let received_url = url
-    await clearToolbarState(tab)
-
     if (received_url && !isArchiveUrl(received_url)) {
       let open_url = received_url.replace(/^https?:\/\//, '')
       if (open_url.slice(-1) === '/') { open_url = received_url.substring(0, open_url.length - 1) }
 
-      chrome.storage.local.get(['amazon_setting', 'tvnews_setting'], (settings) => {
+      chrome.storage.local.get(['private_mode_setting', 'amazon_setting', 'tvnews_setting'], (settings) => {
+        if (settings?.private_mode_setting !== false) { return }
 
         // checking amazon books
         if (settings?.amazon_setting) {
@@ -816,7 +839,7 @@ chrome.tabs.onActivated.addListener((info) => {
         // BUG: Stale 'V' state stored for tab id that no longer exists, never gets cleared!
         await removeToolbarState(tab, 'V');
       }
-      updateToolbar(tab, tbStates);
+      updateToolbar(tab, await getToolbarState(tab));
       updateWaybackCountBadge(tab, tab.url)
     })
   })
@@ -832,46 +855,35 @@ chrome.tabs.onActivated.addListener((info) => {
  * @param beforeDate {Date}: Date that will be checked only if url previously saved in WM.
  * Leave empty to always save. Set to null to save only if hadn't been previously saved.
  */
-async function autoSave(atab, url, beforeDate = new Date()) {
-  let tbStates = await getToolbarState(atab);
-  if (isValidUrl(url) && isNotExcludedUrl(url) && !tbStates.has('S')) {
-    chrome.storage.local.get(['auto_exclude_list'], (items) => {
-      if (!items?.auto_exclude_list ||
-       (items?.auto_exclude_list && !isUrlInList(url, items.auto_exclude_list))) {
-        // checking against cached time will prevent recent auto-saves from re-saving again.
-        getCachedWaybackCount(url, (values) => {
-          if (values?.total === -1) {
-            // don't auto save since this is a blocked URL
-          } else if (values?.total === 0) {
-            // save since url hasn't been saved before
-            savePageNowChecked(atab, url, true)
-          } else if (beforeDate && values?.last_ts) {
-            // save if timestamp from wayback count is older than beforeDate
-            const checkDate = timestampToDate(values.last_ts)
-            if (checkDate.getTime() < beforeDate.getTime()) {
-              savePageNowChecked(atab, url, true)
-            }
-          }
-        },
-        (error) => {
-          console.log('wayback count error: ' + error)
-        })
-      }
-    })
-  }
+function autoSaveAllowed(url, settings) {
+  return settings?.private_mode_setting === false &&
+    isNotExcludedUrl(url) && !isArchiveUrl(url) &&
+    !isUrlInList(url, settings.auto_exclude_list || defaultAutoExcludeList)
 }
 
-// Call autoSave() only if logged in.
-//
-/*
-function autoSaveChecked(atab, url, beforeDate) {
-  checkAuthentication((results) => {
-    if (results?.auth_check) {
-      autoSave(atab, url, beforeDate)
-    }
+async function autoSave(atab, url, beforeDate = new Date()) {
+  if ((await getToolbarState(atab)).has('S')) { return }
+  const keys = ['private_mode_setting', 'auto_exclude_list']
+  chrome.storage.local.get(keys, (settings) => {
+    if (!autoSaveAllowed(url, settings)) { return }
+    getCachedWaybackCount(url, (values) => {
+      const lastCapture = timestampToDate(values?.last_ts)
+      const shouldSave = values?.total === 0 ||
+        (values?.total > 0 && beforeDate && lastCapture && lastCapture < beforeDate)
+      if (!shouldSave) { return }
+      checkAuthentication((auth) => {
+        // Re-check at the last asynchronous boundary before publishing the URL.
+        chrome.storage.local.get(keys, (current) => {
+          if (autoSaveAllowed(url, current)) {
+            savePageNow(atab, url, true, undefined, auth?.auth_check || false)
+          }
+        })
+      })
+    }, (error) => {
+      console.log('wayback count error: ' + error)
+    })
   })
 }
-*/
 
 // Add a listener for handling Auto Save Bookmarks.
 function autoBookmarksListener(id, bookmark) {
@@ -911,6 +923,9 @@ chrome.permissions.onAdded.addListener((permissions) => {
     chrome.storage.local.set({ auto_bookmark_setting: true })
   }
 })
+
+// Restore work when the browser wakes a new event page in this session.
+resumeSaveJobs()
 
 // Called once on extension load, in case permission allowed on start.
 setupAutoSaveBookmarks()
@@ -969,109 +984,72 @@ function factCheck(atab, url) {
 
 /* * * Wayback Count * * */
 
-function getCachedWaybackCount(url, onSuccess, onFail) {
-  // Retrieve the waybackCountCache object from chrome.storage
-  chrome.storage.session.get(['waybackCountCache'], function(result) {
-    if (chrome.runtime.lastError) {
-      console.error(chrome.runtime.lastError);
-      onFail(); // Call onFail callback in case of error
-      return;
+const countCacheTTL = 5 * 60 * 1000
+const maxCountEntries = 64
+const countCacheKey = 'waybackCountCacheV2'
+let countCacheWrites = Promise.resolve()
+let countCacheEpoch = 0
+
+function writeCountCache(change) {
+  countCacheWrites = countCacheWrites.then(async () => {
+    const cache = (await chrome.storage.session.get(countCacheKey))[countCacheKey] || {}
+    change(cache)
+    const entries = Object.entries(cache)
+      .filter(([, item]) => Date.now() - item.savedAt < countCacheTTL)
+      .sort(([, left], [, right]) => right.savedAt - left.savedAt)
+      .slice(0, maxCountEntries)
+    await chrome.storage.session.set({ [countCacheKey]: Object.fromEntries(entries) })
+  }).catch(error => console.warn('Wayback count cache write failed', error))
+}
+
+async function getCachedWaybackCount(url, onSuccess, onFail) {
+  if (!isNotExcludedUrl(url)) { onFail(new Error('Unsupported URL')); return }
+  const started = Date.now()
+  const epoch = countCacheEpoch
+  try {
+    await countCacheWrites
+    const item = (await chrome.storage.session.get(countCacheKey))[countCacheKey]?.[url]
+    if (item && Date.now() - item.savedAt < countCacheTTL) {
+      onSuccess(item.values)
+      return
     }
-
-    // Get the waybackCountCache object from the result or initialize it if it doesn't exist
-    let waybackCountCache = result.waybackCountCache || {};
-
-    // Check if cacheValues for the specified URL exist in the waybackCountCache
-    let cacheValues = waybackCountCache[url];
-
-    if (cacheValues) {
-      // If cacheValues exist, call onSuccess callback with cacheValues
-      onSuccess(cacheValues);
-    } else {
-      // If cacheValues don't exist, fetch them using getWaybackCount
-      getWaybackCount(url, function(values) {
-        // Update waybackCountCache with the fetched values
-        waybackCountCache[url] = values;
-
-        // Store the updated waybackCountCache back into chrome.storage
-        // TODO: Is this the most efficient way to store? Do objects take up too much space? [CG]
-        chrome.storage.session.set({ waybackCountCache }, function() {
-          if (chrome.runtime.lastError) {
-            console.error(chrome.runtime.lastError);
-            // TODO: since we have the values, should still pass to onSuccess() [CG]
-            onFail(); // Call onFail callback in case of error while storing
-          } else {
-            // Call onSuccess callback with the fetched values
-            // TODO: may want to call onSuccess() outside .set ?? [CG]
-            onSuccess(values);
-          }
-        });
-      }, onFail);
+  } catch (error) {
+    console.warn('Wayback count cache read failed', error)
+  }
+  getWaybackCount(url, values => {
+    if (epoch === countCacheEpoch) {
+      writeCountCache(cache => {
+        if (!cache[url] || cache[url].savedAt <= started) {
+          cache[url] = { savedAt: Date.now(), values }
+        }
+      })
     }
-  });
+    onSuccess(values)
+  }, onFail)
 }
 
 function clearCountCache() {
-  // Store the updated waybackCountCache into chrome.storage
-  // TODO: Would it be better to delete the key? [CG]
-  chrome.storage.session.set({ waybackCountCache: {} }, function() {
-    if (chrome.runtime.lastError) {
-      console.error(chrome.runtime.lastError);
-    } else {
-      console.log('waybackCountCache reset and stored successfully');
-    }
-  });
+  countCacheEpoch++
+  countCacheWrites = countCacheWrites.then(() =>
+    chrome.storage.session.remove(['waybackCountCache', countCacheKey])
+  ).catch(error => console.warn('Could not clear Wayback count cache', error))
 }
 
-/**
- * Adds +1 to url in cache, or set to 1 if it doesn't exist.
- * Also updates "last_ts" with current timestamp.
- * Doesn't update if cached "total" value was < 0.
- * @param url {string}
- */
-function incrementCount(url) {
-  // Retrieve the waybackCountCache object from chrome.storage
-  chrome.storage.session.get(['waybackCountCache'], (result) => {
-    if (chrome.runtime.lastError) {
-      console.error(chrome.runtime.lastError);
-      return; // Exit if there's an error
-    }
-
-    // Get the waybackCountCache object from the result or initialize it if it doesn't exist
-    let waybackCountCache = result.waybackCountCache || {};
-
-    // Get the current timestamp
-    let timestamp = dateToTimestamp(new Date());
-
-    // Get the cacheValues for the specified URL
-    let cacheValues = waybackCountCache[url];
-    if (cacheValues?.total) {
-      if (cacheValues.total > 0) {
-        cacheValues.total += 1;
-        cacheValues.last_ts = timestamp;
-        waybackCountCache[url] = cacheValues;
-      }
-      // else don't update if total is a special value < 0
-    } else {
-      // set total to 1 if it's a new URL
-      waybackCountCache[url] = { total: 1, last_ts: timestamp };
-    }
-
-    // Store the updated waybackCountCache back into chrome.storage
-    chrome.storage.session.set({ waybackCountCache }, () => {
-      if (chrome.runtime.lastError) {
-        console.error(chrome.runtime.lastError);
-      } else {
-        console.log('waybackCountCache updated and stored successfully');
-      }
-    });
-  });
+function incrementCount(url, timestamp) {
+  if (!isNotExcludedUrl(url) || !/^\d{14}$/.test(timestamp)) { return }
+  writeCountCache(cache => {
+    const item = cache[url]
+    if (!item || Date.now() - item.savedAt >= countCacheTTL) { return }
+    if (item.values.total < 0 || item.values.last_ts >= timestamp) { return }
+    item.values.total++
+    item.values.last_ts = timestamp
+  })
 }
 
 function updateWaybackCountBadge(atab, url) {
   if (!atab) { return }
-  chrome.storage.local.get(['wm_count_setting'], (settings) => {
-    if (settings?.wm_count_setting && isValidUrl(url) && isNotExcludedUrl(url) && !isArchiveUrl(url)) {
+  chrome.storage.local.get(['private_mode_setting', 'wm_count_setting'], (settings) => {
+    if (settings?.private_mode_setting === false && settings.wm_count_setting && isValidUrl(url) && isNotExcludedUrl(url) && !isArchiveUrl(url)) {
       getCachedWaybackCount(url, async(values) => {
         let tbStates = await getToolbarState(atab);
         if ((values.total >= 0) && !tbStates.has('S')) {
@@ -1114,38 +1092,25 @@ function setToolbarIcon(name, tabId = null) {
     '32': (path + prefix + n + ab + '32.png'),
     '64': (path + prefix + n + ab + '64.png')
   }
-  let details = (tabId) ? { path: allPaths, tabId } : { path: allPaths }
+  const details = Number.isInteger(tabId) ? { path: allPaths, tabId } : { path: allPaths }
   chrome.action.setIcon(details, checkLastError)
 }
 
-// Add state to the state set for given Tab, and update toolbar.
-// state is 'S', 'R', or 'check'
-// Add 'books' or 'papers' to display popup buttons for wikipedia resources.
-async function addToolbarState(atab, state) {
-
-  if (!atab) { return }
-  let data = await readTabData(atab);
-  let tbStates = toolbarStateFromTabData(data);
-  if (!tbStates.has(state)) {
-    // only save state if not already in set
-    tbStates.add(state);
-    await saveTabData(atab, { states: Array.from(tbStates) });
-  }
-  updateToolbar(atab, tbStates);
+function changeToolbarState(tab, state, enabled) {
+  return mutateTabData(tab, data => {
+    const states = toolbarStateFromTabData(data)
+    if (states.has(state) === enabled) { return false }
+    if (enabled) { states.add(state) } else { states.delete(state) }
+    data.states = Array.from(states)
+  }, data => updateToolbar(tab, toolbarStateFromTabData(data)))
 }
 
-// Remove state from the state set for given Tab, and update toolbar.
-async function removeToolbarState(atab, state) {
+function addToolbarState(tab, state) {
+  return changeToolbarState(tab, state, true)
+}
 
-  if (!atab) { return }
-  let data = await readTabData(atab);
-  let tbStates = toolbarStateFromTabData(data);
-  if (tbStates.has(state)) {
-    // only save state if state to remove was in set
-    tbStates.delete(state);
-    await saveTabData(atab, { states: Array.from(tbStates) });
-  }
-  updateToolbar(atab, tbStates);
+function removeToolbarState(tab, state) {
+  return changeToolbarState(tab, state, false)
 }
 
 // Helper function to return Set of toolbar states from tab data.
@@ -1166,43 +1131,14 @@ async function getToolbarState(atab) {
   return toolbarStateFromTabData(data);
 }
 
-// Clears state for given Tab and update toolbar icon.
-async function clearToolbarState(atab) {
-
-  if (!atab) { return }
-  await clearTabData(atab, ['states']);
-  updateToolbar(atab, null);
+function clearToolbarState(tab) {
+  return clearTabData(tab, () => updateToolbar(tab))
 }
 
-/**
- * Updates the toolbar icon using the Set of states provided.
- * Only updates icon if atab is the currently active tab, else does nothing.
- * @param atab {Tab}
- * @param states {Set}
- */
-function updateToolbar(atab, states) {
-
-  if (!atab) { return }
-  if (!states) { states = new Set(); }
-  // Query active tab to update toolbar icon
-  chrome.tabs.query({ active: true, windowId: atab.windowId, windowType: 'normal' }, (tabs) => {
-    if (tabs?.[0]?.id === atab.id && tabs[0]?.windowId === atab.windowId) {
-      // Determine which icon to display based on state
-      if (states?.has('S')) {
-        setToolbarIcon('S', atab.id);
-      } else if (states?.has('V')) {
-        setToolbarIcon('V', atab.id);
-      } else if (states?.has('F')) {
-        setToolbarIcon('F', atab.id);
-      } else if (states?.has('R')) {
-        setToolbarIcon('R', atab.id);
-      } else if (states?.has('check')) {
-        setToolbarIcon('check', atab.id);
-      } else {
-        setToolbarIcon('archive', atab.id);
-      }
-    }
-  });
+function updateToolbar(tab, states = new Set()) {
+  if (!Number.isInteger(tab?.id) || tab.id < 0) { return }
+  const icon = ['S', 'V', 'F', 'R', 'check'].find(state => states.has(state)) || 'archive'
+  setToolbarIcon(icon, tab.id)
 }
 
 /* * * Right-click Menu * * */

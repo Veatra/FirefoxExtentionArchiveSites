@@ -25,7 +25,7 @@
 
       <div id="url-not-supported-msg"></div>
       <div id="wayback-count-msg">&nbsp;</div>
-      <div id="spn-system-status-msg"></div>
+      <div id="spn-system-status-msg" role="status"></div>
       <div id="using-search-msg"></div>
       <div id="last-saved-msg">&nbsp;</div>
 
@@ -54,6 +54,18 @@
           </button>
         </div>
       </div>
+
+      <details id="archives-panel">
+        <summary>Archives</summary>
+        <label for="archive-capture-limit">Recent captures</label>
+        <select id="archive-capture-limit">
+          <option>5</option>
+          <option>10</option>
+          <option>20</option>
+        </select>
+        <p id="archive-capture-status" role="status"></p>
+        <ul id="archive-capture-list" aria-label="Recent Wayback captures"></ul>
+      </details>
 
       <div id="spn-container">
         <div class="spn-flip flip">
@@ -404,6 +416,7 @@
   <script src="libs/bootstrap.js"></script>
   <script src="scripts/utils.js"></script>
   <script src="scripts/popup.js"></script>
+  <script src="scripts/archives-panel.js"></script>
   <script src="scripts/settings.js"></script>
   <script src="scripts/login.js"></script>
 </body>

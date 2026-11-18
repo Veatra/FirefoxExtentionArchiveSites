@@ -15,24 +15,6 @@ const defaultAutoExcludeList = [
   '*.proton.me*'
 ]
 
-// list of excluded URLs
-const excluded_urls = [
-  '127.0.0.1',
-  'localhost',
-  '0.0.0.0',
-  'chrome:',
-  'chrome-extension:',
-  'about:',
-  'moz-extension:',
-  '192.168.',
-  '10.',
-  'file:',
-  'edge:',
-  'extension:',
-  'safari-web-extension:',
-  'chrome-error:'
-]
-
 const newshosts = new Set([
   'apnews.com',
   'www.factcheck.org',
@@ -211,67 +193,62 @@ function checkAuthentication(acallback) {
 
 /* * * Storage functions * * */
 
-// Returns a string key from a Tab windowId and tab id, and maybe a slice of URL.
-function getTabKey(atab) {
-  return (atab) ? '' + (('windowId' in atab) ? atab.windowId : '') + 'i' + (('id' in atab) ? atab.id : '') : ''
+function getTabKey(tab) {
+  return Number.isInteger(tab?.id) && tab.id >= 0 &&
+    Number.isInteger(tab?.windowId) && tab.windowId >= 0
+    ? `${tab.windowId}i${tab.id}` : ''
 }
 
-/**
- * Saves key/value pairs in storage for other files to read for given tab.
- * @param atab {Tab}: Current tab which includes .windowId and .id values.
- * @param data: Object of key:value pairs to store. Appends or writes over existing key:value pairs.
- * @return Promise
- */
-async function saveTabData(atab, data) {
-  if (!(atab?.id && atab?.windowId)) { return }
-  let key = 'tab_' + getTabKey(atab)
-  // take exisiting data in storage and overwrite with new data
-  let result = await chrome.storage.session.get(key);
-  let exdata = result[key] || {}
-  for (let [k, v] of Object.entries(data)) { exdata[k] = v }
-  let obj = {}
-  obj[key] = exdata
-  return chrome.storage.session.set(obj);
+const tabDataUpdates = new Map()
+
+function queueTabData(tab, run) {
+  const id = getTabKey(tab)
+  if (!id) { return Promise.resolve() }
+  const key = 'tab_' + id
+  const previous = tabDataUpdates.get(key) || Promise.resolve()
+  const pending = previous.catch(() => {}).then(() => run(key))
+  tabDataUpdates.set(key, pending)
+  return pending.catch(error => {
+    console.warn('Could not update Wayback tab state', error)
+  }).finally(() => {
+    if (tabDataUpdates.get(key) === pending) { tabDataUpdates.delete(key) }
+  })
 }
 
-/**
- * Clears keys in storage for given tab.
- * @param atab {Tab}: Current tab which includes .windowId and .id values.
- * @param keylist: Array of keys to delete.
- * @return Promise
- */
-async function clearTabData(atab, keylist) {
-  if (!(atab?.id && atab?.windowId)) { return }
-  let key = 'tab_' + getTabKey(atab)
-  // take exisiting data in storage and delete any items from keylist
-  let result = await chrome.storage.session.get(key);
-  let exdata = result[key] || {}
-  let count = 0;
-  for (let k of keylist) {
-    if (k in exdata) { delete exdata[k]; count += 1; }
-  }
-  if (count > 0) {
-    // Only save to storage if changes occurred
-    let obj = {}
-    obj[key] = exdata
-    return chrome.storage.session.set(obj);
-  }
+function mutateTabData(tab, change, afterChange) {
+  return queueTabData(tab, async key => {
+    const liveTab = await new Promise(resolve => {
+      chrome.tabs.get(tab.id, result => {
+        resolve(chrome.runtime.lastError ? null : result)
+      })
+    })
+    if (!liveTab || liveTab.windowId !== tab.windowId ||
+      (tab.url && liveTab.url && tab.url !== liveTab.url)) { return }
+    const data = (await chrome.storage.session.get(key))[key] || {}
+    const result = change(data)
+    if (result !== false) { await chrome.storage.session.set({ [key]: data }) }
+    if (afterChange) { afterChange(data) }
+  })
 }
 
-/**
- * Reads key/value pairs from storage for given tab.
- * @param atab {Tab}: Current tab which includes .windowId and .id values.
- * @return Promise data is an object of key:value pairs stored for given tab, or data is undefined.
- */
-async function readTabData(atab) {
-  if (!(atab?.id && atab?.windowId)) { return }
-  const key = 'tab_' + getTabKey(atab)
-  const result = await chrome.storage.session.get(key);
-  return result[key];
+function saveTabData(tab, data) {
+  return mutateTabData(tab, previous => Object.assign(previous, data))
 }
 
-// TODO: Need to clear stale tab data for tabs that no longer exist.
-// Using chrome.storage.session instead of .local helps somewhat.
+function clearTabData(tab, afterChange) {
+  return queueTabData(tab, async key => {
+    await chrome.storage.session.remove(key)
+    if (afterChange) { afterChange() }
+  })
+}
+
+async function readTabData(tab) {
+  const id = getTabKey(tab)
+  if (!id) { return }
+  const key = 'tab_' + id
+  await tabDataUpdates.get(key)?.catch(() => {})
+  return (await chrome.storage.session.get(key))[key]
+}
 
 /* * * Toolbar icon functions * * */
 
@@ -321,40 +298,47 @@ function badgeCountText(count) {
  * onSuccess is an object { "total": int, "first_ts": string, "last_ts": string }
  * onFail is an Error object or null.
  */
-function getWaybackCount(url, onSuccess, onFail) {
-  if (isValidUrl(url) && isNotExcludedUrl(url)) {
-    const requestUrl = hostURL + '__wb/sparkline?collection=web&output=json&url=' + fixedEncodeURIComponent(url)
-    const timeoutPromise = new Promise((resolve, reject) => {
-      setTimeout(() => {
-        reject(new Error('timeout'))
-      }, 30000)
-      fetch(requestUrl, {
-        method: 'GET',
-        headers: hostHeaders
-      })
-      .then(resolve, reject)
-    })
-    return timeoutPromise
-    .then(response => response.json())
-    .then(json => {
-      let total = 0
-      if (isObject(json.years)) {
-        total = Object.values(json.years).flat().reduce((a, b) => a + b, 0)
-      }
-      // set total to special value if URL is excluded from viewing
-      if (json?.error?.type === 'blocked') {
-        total = -1
-      }
-      onSuccess({ total: total, first_ts: json.first_ts, last_ts: json.last_ts })
-    })
-    .catch(error => {
-      console.log('getWaybackCount FAILED: ', error)
-      if (onFail) { onFail(error) }
-    })
-  } else {
-    console.log('getWaybackCount: not a valid URL')
-    if (onFail) { onFail(null) }
+async function fetchWithTimeout(url, options = {}, read = response => response.json(), timeout = 10000) {
+  const { signal, ...request } = options
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (signal?.aborted) { abort() }
+  signal?.addEventListener('abort', abort, { once: true })
+  const timer = setTimeout(abort, timeout)
+  try {
+    const response = await fetch(url, { headers: hostHeaders, ...request, signal: controller.signal })
+    return await read(response)
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', abort)
   }
+}
+
+function getWaybackSparkline(url, signal) {
+  if (!isNotExcludedUrl(url)) { return Promise.reject(new Error('Unsupported URL')) }
+  const requestUrl = hostURL + '__wb/sparkline?collection=web&output=json&url=' + fixedEncodeURIComponent(url)
+  return fetchWithTimeout(requestUrl, { signal, credentials: 'omit' }, async response => {
+    if (!response.ok) { throw new Error('Wayback sparkline HTTP ' + response.status) }
+    const json = await response.json()
+    if (json?.error?.type === 'blocked') { return { total: -1 } }
+    if (!isObject(json?.years) || json.error) { throw new Error('Invalid Wayback count response') }
+    const counts = Object.values(json.years).flat()
+    if (!counts.every(count => Number.isInteger(count) && count >= 0)) {
+      throw new Error('Invalid Wayback capture counts')
+    }
+    return {
+      total: counts.reduce((sum, count) => sum + count, 0),
+      first_ts: json.first_ts,
+      last_ts: json.last_ts
+    }
+  })
+}
+
+function getWaybackCount(url, onSuccess, onFail) {
+  return getWaybackSparkline(url).then(onSuccess).catch(error => {
+    console.warn('Could not get Wayback count', error)
+    if (onFail) { onFail(error) }
+  })
 }
 
 /**
@@ -362,11 +346,7 @@ function getWaybackCount(url, onSuccess, onFail) {
  */
 function wmAvailabilityCheck(url, onsuccess, onfail) {
   const requestUrl = hostURL + 'wayback/available?url=' + fixedEncodeURIComponent(url)
-  fetch(requestUrl, {
-    method: 'GET',
-    headers: hostHeaders
-  })
-  .then(response => response.json())
+  fetchWithTimeout(requestUrl)
   .then((json) => {
     let wayback_url = getWaybackUrlFromResponse(json)
     let timestamp = getWaybackTimestampFromResponse(json)
@@ -403,9 +383,17 @@ function isArchiveUrl(url) {
  * @param url {string}
  * @return {bool}
  */
+function parseWebUrl(value) {
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value)) { return null }
+  try {
+    return new URL(value)
+  } catch (error) {
+    return null
+  }
+}
+
 function isValidUrl(url) {
-  return ((typeof url) === 'string' &&
-    (url.indexOf('http://') === 0 || url.indexOf('https://') === 0))
+  return parseWebUrl(url) !== null
 }
 
 /**
@@ -440,19 +428,33 @@ function cropScheme(url) {
   return null
 }
 
-// Function to check whether it is a valid URL or not. Case insensitive.
-// Returns: true = good, false = excluded URL.
+// Classify the URL literal locally. DNS names may still resolve to private addresses.
 function isNotExcludedUrl(url) {
-  if (typeof url !== 'string') { return false }
-  if (url.trim() === '') { return false }
-  url = url.toLowerCase()
-  for (let exUrl of excluded_urls) {
-    exUrl = exUrl.toLowerCase()
-    if (url.startsWith(exUrl) || url.startsWith('http://' + exUrl) || url.startsWith('https://' + exUrl)) {
-      return false
-    }
+  const parsed = parseWebUrl(url)
+  if (!parsed || parsed.username || parsed.password) { return false }
+  const host = parsed.hostname.replace(/\.$/, '')
+  if (host.startsWith('[')) {
+    // Accept global unicast only, excluding transition, protocol and documentation blocks.
+    const [first, second] = host.slice(1, -1).split(':').map(part => parseInt(part || '0', 16))
+    return first >= 0x2000 && first <= 0x3fff &&
+      !(first === 0x2001 && (second < 0x200 || second === 0xdb8)) &&
+      first !== 0x2002 && first !== 0x3fff
   }
-  return true
+
+  if (/^\d+(?:\.\d+){3}$/.test(host)) {
+    // URL normalizes alternate IPv4 representations before this check.
+    const [a, b, c] = host.split('.').map(Number)
+    return a !== 0 && a !== 10 && a !== 127 && a < 224 &&
+      !(a === 100 && b >= 64 && b <= 127) &&
+      !(a === 169 && b === 254) && !(a === 172 && b >= 16 && b <= 31) &&
+      !(a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2)) ||
+        (b === 88 && c === 99))) &&
+      !(a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) &&
+      !(a === 203 && b === 0 && c === 113)
+  }
+
+  return host.includes('.') && !/\.(?:localhost|local|internal|lan|home|corp|onion|test|invalid|example|localdomain)$/.test(host) &&
+    !host.endsWith('.home.arpa')
 }
 
 function remove_port(url) {
@@ -590,35 +592,51 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-/**
- * Recursive test to see if text matches pattern string.
- * Runs in O(n^2) time?
- * @param text {string}: string to test which doesn't have any wildcards.
- * @param pattern {string}: to match which may contain 1 or more '*' as wildcards.
- * @return {bool}: true if matches, false if doesn't.
- */
+// Match literal segments in order. Stars can match zero or more characters.
 function matchWildcard(text, pattern) {
-  if ((pattern.length === 0) && (text.length === 0)) { return true }
-  if ((pattern.length === 1) && (pattern[0] === '*')) { return true }
-  if ((pattern.length > 1) && (pattern[0] === '*') && (text.length === 0)) { return false }
-  if ((pattern.length > 0) && (text.length > 0) && (pattern[0] === text[0])) {
-    return matchWildcard(text.substring(1), pattern.substring(1))
+  if (typeof text !== 'string' || typeof pattern !== 'string') { return false }
+  text = text.toLowerCase()
+  const parts = pattern.toLowerCase().split('*')
+  const first = parts.shift()
+  if (!parts.length) { return text === first }
+  const last = parts.pop()
+  if (!text.startsWith(first) || !text.endsWith(last)) { return false }
+
+  let cursor = first.length
+  const end = text.length - last.length
+  if (cursor > end) { return false }
+  for (const part of parts) {
+    if (!part) { continue }
+    const index = text.indexOf(part, cursor)
+    if (index < 0 || index + part.length > end) { return false }
+    cursor = index + part.length
   }
-  if ((pattern.length > 0) && (pattern[0] === '*')) {
-    return matchWildcard(text, pattern.substring(1)) || matchWildcard(text.substring(1), pattern)
-  }
-  return false
+  return true
 }
 
-/**
- * Checks URL against given list of URL patterns.
- * @param url {string}: URL to check against list.
- * @param patterns {array of strings}: List of patterns that may include '*' wildcards.
- * @returns {bool}: true if URL matches any pattern in the list.
- */
+function normalizeExcludePattern(pattern) {
+  if (typeof pattern !== 'string') { return '' }
+  return cropPrefix(pattern.trim().toLowerCase())
+}
+
 function isUrlInList(url, patterns) {
-  const curl = cropPrefix(url)
-  return patterns.some(pat => matchWildcard(curl, pat))
+  if (typeof url !== 'string' || !Array.isArray(patterns)) { return false }
+  const parsed = parseWebUrl(url)
+  const candidate = parsed
+    ? cropPrefix((parsed.hostname.replace(/\.$/, '') + (parsed.port ? ':' + parsed.port : '') +
+      parsed.pathname + parsed.search + parsed.hash).toLowerCase())
+    : cropPrefix(url.toLowerCase())
+  return patterns.some(pattern => {
+    const normalized = normalizeExcludePattern(pattern)
+    if (!normalized) { return false }
+    if (normalized === '*.discord.com/api/webhooks/*') {
+      return /^(?:[^/:]+\.)?discord\.com(?::\d+)?\/api\/webhooks(?:\/|$)/.test(candidate)
+    }
+    if (normalized === '*.proton.me*') {
+      return /^(?:[^/:]+\.)?proton\.me(?=[:/?#]|$)/.test(candidate)
+    }
+    return matchWildcard(candidate, normalized)
+  })
 }
 
 /**
@@ -665,8 +683,14 @@ function opener(url, option, callback) {
   } else {
     chrome.windows.getCurrent({ populate: true }, (window) => {
       // Access window properties
-      let h = window.width;
-      let w = window.height;
+      let w = window?.width;
+      let h = window?.height;
+      if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+        chrome.windows.create({ url, type: 'popup' }, (created) => {
+          if (callback && created?.tabs?.[0]) { callback(created.tabs[0].id) }
+        })
+        return
+      }
       if (w > h) {
         // landscape screen
         const maxW = 1200
@@ -678,7 +702,7 @@ function opener(url, option, callback) {
         h = Math.floor(h * 0.9)
       }
       chrome.windows.create({ url: url, width: w, height: h, type: 'popup' }, (window) => {
-        if (callback) { callback(window.tabs[0].id) }
+        if (callback && window?.tabs?.[0]) { callback(window.tabs[0].id) }
       })
     });
   }
@@ -735,14 +759,14 @@ function attachTooltip (anchor, tooltip, pos = 'right', time = 200) {
   })
   .tooltip({
     // animated option removed in Bootstrap 5, but jQuery plugin API should handle it
-    placement: `${pos} auto`,
+    placement: pos,
     html: true,
     trigger: 'manual'
   })
   // Handles staying open
   .on('mouseenter click', () => {
     $(anchor).tooltip('show')
-    $('.popup_box').on('mouseleave', () => {
+    $('.popup_box').off('mouseleave.waybackTooltip').one('mouseleave.waybackTooltip', () => {
       setTimeout(() => {
         if (!$(`.${anchor.attr('class')}[href*="${anchor.attr('href')}"]:hover`).length) {
           $(anchor).tooltip('hide')
@@ -808,9 +832,6 @@ function setupContextMenus(enabled) {
 
 // Default Settings prior to accepting terms.
 function initDefaultOptions () {
-  chrome.storage.session.set({
-    waybackCountCache: {}
-  });
   chrome.storage.local.set({
     agreement: false, // needed for firefox
     spn_outlinks: false,
@@ -857,6 +878,7 @@ if (typeof module !== 'undefined') {
     isArchiveUrl,
     isValidUrl,
     isUrlInList,
+    normalizeExcludePattern,
     matchWildcard,
     makeValidURL,
     cropPrefix,
@@ -874,8 +896,11 @@ if (typeof module !== 'undefined') {
     getTabKey,
     saveTabData,
     clearTabData,
+    mutateTabData,
     readTabData,
     getWaybackCount,
+    getWaybackSparkline,
+    fetchWithTimeout,
     badgeCountText,
     isBadgeOnTop,
     isDevVersion,
